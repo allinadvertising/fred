@@ -18,7 +18,7 @@ This workflow relies on your chatbot supporting custom connectors:
 3) Open `http://localhost:3000`
 
 ## Deploying to GitHub Pages
-- A GitHub Actions workflow (`.github/workflows/deploy.yml`) builds and exports the site, then publishes the `out/` folder to the `gh-pages` branch.
+- A GitHub Actions workflow (`.github/workflows/deploy.yml`) runs `next build` (with `output: 'export'` in `next.config.mjs`), then publishes the generated `out/` folder to the `gh-pages` branch.
 - Base path and asset prefix are set to `/fred` during the build so assets resolve correctly on `https://<user>.github.io/fred`.
 - After the first successful workflow run, set GitHub Pages to serve from the `gh-pages` branch (root). Subsequent pushes to `main` will auto-update Pages.
 
