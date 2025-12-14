@@ -250,7 +250,7 @@ export default function HomePage() {
           ))
         ) : (
           <div className="glass rounded-3xl border border-dashed border-slate-800 px-5 py-6 text-sm text-slate-300 shadow-soft md:px-7">
-            Press "Validate & Generate" to render your tailored prompts. Required fields must be
+            Press &quot;Validate &amp; Generate&quot; to render your tailored prompts. Required fields must be
             complete and valid first.
           </div>
         )}
