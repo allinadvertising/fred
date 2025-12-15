@@ -28,6 +28,9 @@ This workflow relies on your chatbot supporting custom connectors:
 3) Copy any prompt and paste into your chatbot that has the needed connectors enabled.  
 4) For Ahrefs-specific steps, use Claude with the Ahrefs MCP server configured.
 
+## Next steps
+- Add validation for pasted URLs (ensure at least 10 URLs, and at least 90% return HTTP 200).
+
 ## Notes
 - Prompts live in `lib/prompts.ts` and are mirrored from the markdown files in `/prompts`.
 - The Ahrefs prompt must be run in a chatbot session that can call the Ahrefs MCP server; without it, the prompt will not function as intended.
