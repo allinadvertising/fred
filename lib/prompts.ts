@@ -5,6 +5,7 @@ export type FormValues = {
   knownProducts: string;
   focus: string;
   targetMarket: string;
+  keywordUrls: string;
 };
 
 export type PromptDefinition = {
@@ -198,6 +199,11 @@ If you cannot access the site or sources:
 
 const prompt2Template = (values: FormValues) => {
   const targetMarket = cleanValue(values.targetMarket);
+  const formattedUrls = values.keywordUrls
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n');
   return `# Ahrefs Keyword Extraction Prompt
 
 **Input Parameter:**
@@ -216,7 +222,9 @@ The desired output is a **CSV file** containing the following specific columns:
 6. Parent Topic (Optional, but helpful for grouping)
 7. Intent (Must be classified as Informational, Commercial, Transactional, or Navigational)
 
-**Note:** Ensure all columns are populated, as Intent and CPC are strictly required for downstream scoring calculations.`;
+**Note:** Ensure all columns are populated, as Intent and CPC are strictly required for downstream scoring calculations.${
+    formattedUrls ? `\n\nURLs:\n${formattedUrls}` : ''
+  }`;
 };
 
 const prompt3Template = () => `# Keyword Analysis, Scoring & Clustering Prompt

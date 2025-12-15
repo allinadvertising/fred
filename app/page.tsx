@@ -11,7 +11,8 @@ const initialValues: FormValues = {
   businessType: '',
   knownProducts: '',
   focus: '',
-  targetMarket: ''
+  targetMarket: '',
+  keywordUrls: ''
 };
 
 const fieldConfig: Array<{
@@ -20,6 +21,7 @@ const fieldConfig: Array<{
   placeholder: string;
   required?: boolean;
   helper?: string;
+  multiline?: boolean;
 }> = [
   {
     key: 'clientName',
@@ -39,6 +41,13 @@ const fieldConfig: Array<{
     placeholder: 'Canada, USA, UK, etc.',
     required: true,
     helper: 'Used in the Ahrefs keyword extraction prompt.'
+  },
+  {
+    key: 'keywordUrls',
+    label: 'List of URLs for keyword research',
+    placeholder: 'https://example.com/page-1\nhttps://example.com/page-2',
+    helper: 'Paste one URL per line; included in the Ahrefs extraction prompt.',
+    multiline: true
   },
   {
     key: 'businessType',
@@ -164,19 +173,35 @@ export default function HomePage() {
                   {field.label}
                   {field.required && <span className="text-accent"> *</span>}
                 </label>
-                <input
-                  id={field.key}
-                  className="input"
-                  placeholder={field.placeholder}
-                  value={formValues[field.key]}
-                  onChange={(event) => {
-                    const nextValue = event.target.value;
-                    setFormValues((prev) => ({ ...prev, [field.key]: nextValue }));
-                    if (hasValidated && !pendingValidation) {
-                      setPendingValidation(true);
-                    }
-                  }}
-                />
+                {field.multiline ? (
+                  <textarea
+                    id={field.key}
+                    className="input min-h-28"
+                    placeholder={field.placeholder}
+                    value={formValues[field.key]}
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
+                      setFormValues((prev) => ({ ...prev, [field.key]: nextValue }));
+                      if (hasValidated && !pendingValidation) {
+                        setPendingValidation(true);
+                      }
+                    }}
+                  />
+                ) : (
+                  <input
+                    id={field.key}
+                    className="input"
+                    placeholder={field.placeholder}
+                    value={formValues[field.key]}
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
+                      setFormValues((prev) => ({ ...prev, [field.key]: nextValue }));
+                      if (hasValidated && !pendingValidation) {
+                        setPendingValidation(true);
+                      }
+                    }}
+                  />
+                )}
                 {field.helper && <p className="text-xs text-slate-400">{field.helper}</p>}
                 {errors[field.key] && <p className="error">{errors[field.key]}</p>}
               </div>
