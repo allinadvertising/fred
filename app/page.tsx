@@ -46,7 +46,8 @@ const fieldConfig: Array<{
     key: 'keywordUrls',
     label: 'List of URLs for keyword research',
     placeholder: 'https://example.com/page-1\nhttps://example.com/page-2',
-    helper: 'Paste one URL per line; included in the Ahrefs extraction prompt.',
+    helper: 'Required. Paste one URL per line; included in the Ahrefs extraction prompt.',
+    required: true,
     multiline: true
   },
   {
@@ -81,6 +82,7 @@ const validate = (values: FormValues) => {
   if (!values.clientUrl.trim()) nextErrors.clientUrl = 'Client URL is required.';
   if (values.clientUrl && !isValidUrl(values.clientUrl)) nextErrors.clientUrl = 'Enter a valid http(s) URL.';
   if (!values.targetMarket.trim()) nextErrors.targetMarket = 'Target market is required.';
+  if (!values.keywordUrls.trim()) nextErrors.keywordUrls = 'List of URLs for keyword research is required.';
   return nextErrors;
 };
 

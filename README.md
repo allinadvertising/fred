@@ -3,7 +3,7 @@
 This is a small Next.js workbench that streamlines prompt generation for AI chatbots to run keyword research workflows. It outputs three ready-to-use prompts based on a single client form, so you can copy/paste them into your chatbot without rewriting context each time.
 
 ## How it works
-- Fill the client form once (name, URL, target market, optional details).
+- Fill the client form once (name, URL, target market, list of URLs for keyword research, optional details).
 - The app generates three prompts: executive research summary, Ahrefs keyword extraction, and keyword scoring/clustering.
 - Each prompt has a copy button and stays scrollable for easy handoff.
 
@@ -23,7 +23,7 @@ This workflow relies on your chatbot supporting custom connectors:
 - After the first successful workflow run, set GitHub Pages to serve from the `gh-pages` branch (root). Subsequent pushes to `main` will auto-update Pages.
 
 ## Using the workbench
-1) Complete required fields (client name, URL, target market for Ahrefs).  
+1) Complete required fields (client name, URL, target market for Ahrefs, and the list of URLs for keyword research).  
 2) Click **Validate & Generate**.  
 3) Copy any prompt and paste into your chatbot that has the needed connectors enabled.  
 4) For Ahrefs-specific steps, use Claude with the Ahrefs MCP server configured.

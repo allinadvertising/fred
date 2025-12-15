@@ -229,6 +229,7 @@ Produce a keyword-to-URL mapping where each keyword is assigned to exactly one b
    - Transactional keywords should map to product, collection/category, or service pages (not unrelated informational pages).
    - Informational keywords should map to guides/blog resources (not pure product pages), unless the page itself is informational.
 4. If two URLs could plausibly target the same keyword, you must pick one “canonical target URL” and select an alternative keyword for the other URL(s).
+5. If the Ahrefs API fails globally (no data returned or repeated outage responses), stop immediately and report: "Ahrefs API is having issues. please try again in 10 minutes".
 
 ## Required Workflow (Follow in Order)
 ### Step 1: Understand each URL before choosing keywords
@@ -369,4 +370,9 @@ export const buildPromptOutputs = (values: FormValues): PromptOutput[] =>
     content: prompt.build(values)
   }));
 
-export const requiredFields: Array<keyof FormValues> = ['clientName', 'clientUrl', 'targetMarket'];
+export const requiredFields: Array<keyof FormValues> = [
+  'clientName',
+  'clientUrl',
+  'targetMarket',
+  'keywordUrls'
+];
