@@ -199,32 +199,85 @@ If you cannot access the site or sources:
 
 const prompt2Template = (values: FormValues) => {
   const targetMarket = cleanValue(values.targetMarket);
+
   const formattedUrls = values.keywordUrls
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .join('\n');
-  return `# Ahrefs Keyword Extraction Prompt
+    .join("\n");
 
-**Input Parameter:**
-* **Target Market:** ${targetMarket}
+  return `# Ahrefs Keyword Extraction + URL Mapping Prompt (Anti-Cannibalization + Relevance Guardrails)
 
-**Instruction:**
-Based on the results of your market investigation, use Ahrefs Keywords Explorer, generate a list of high search volume, low competition keywords relevant to the attached list of URLs for the **${targetMarket}**.
+## Role
+You are an SEO keyword strategist. Your job is to assign keywords to specific URLs in a way that is (1) relevant and (2) prevents keyword cannibalization.
 
-**Output Requirement:**
-The desired output is a **CSV file** containing the following specific columns:
-1. URL (The specific page the keyword maps to)
-2. Keyword
-3. Search Volume
-4. Keyword Difficulty
-5. CPC (Cost Per Click)
-6. Parent Topic (Optional, but helpful for grouping)
-7. Intent (Must be classified as Informational, Commercial, Transactional, or Navigational)
+## Input Parameters
+- Target Market (Ahrefs location and language): ${targetMarket}
+- URLs: (see list at bottom)
 
-**Note:** Ensure all columns are populated, as Intent and CPC are strictly required for downstream scoring calculations.${
-    formattedUrls ? `\n\nURLs:\n${formattedUrls}` : ''
-  }`;
+## Primary Goal
+Produce a keyword-to-URL mapping where each keyword is assigned to exactly one best-fit URL, with high topical relevance and clear intent alignment.
+
+## Non-Negotiable Rules (Hard Constraints)
+1. One keyword maps to one URL only.
+   - You must not assign the same keyword to multiple URLs.
+   - This includes near-duplicates and close variants (singular/plural, word order, minor modifiers) that represent the same query intent.
+2. No random associations.
+   - Do not map a keyword to a URL unless the URL's content clearly matches the product/service/topic expressed by the keyword.
+   - Example: “vacuum forming machine” must not be mapped to an “infrared oven” page unless the page is actually about vacuum forming machines.
+3. Intent alignment is mandatory.
+   - Transactional keywords should map to product, collection/category, or service pages (not unrelated informational pages).
+   - Informational keywords should map to guides/blog resources (not pure product pages), unless the page itself is informational.
+4. If two URLs could plausibly target the same keyword, you must pick one “canonical target URL” and select an alternative keyword for the other URL(s).
+
+## Required Workflow (Follow in Order)
+### Step 1: Understand each URL before choosing keywords
+For each URL, infer the page topic and page type using:
+- URL slug and path
+- If accessible in your environment, also use the page title/H1 and primary on-page product/category cues
+
+Classify each URL as one of:
+- Homepage / Brand hub
+- Category / Collection
+- Product / SKU
+- Service page
+- Blog / Resource
+
+### Step 2: Build a candidate keyword set per URL using Ahrefs
+Using Ahrefs Keywords Explorer (for ${targetMarket}), generate candidates that are tightly related to that URL's topic.
+For each candidate, collect:
+- Search Volume
+- Keyword Difficulty
+- CPC
+- Parent Topic
+- Intent (Informational, Commercial, Transactional, Navigational)
+
+### Step 3: Relevance Validation Gate (must pass to be eligible)
+A keyword can be assigned to a URL only if BOTH are true:
+- Topical match: the keyword describes what the URL is about (product/category/service/topic).
+- SERP sanity check: the typical top-ranking pages for that keyword match the URL's page type or offering (use Ahrefs SERP overview as your check).
+
+If you cannot reasonably validate relevance, discard the keyword and choose a more accurate alternative.
+
+### Step 4: Global de-duplication and conflict resolution (anti-cannibalization pass)
+After generating candidates across all URLs:
+- Create a global list of normalized keywords (treat close variants as duplicates when they share the same intent).
+- If a duplicate appears across multiple URLs, resolve it using these tie-breakers in order:
+  1) Best topical match to the URL's core offering
+  2) Best page-type fit (category for broad head terms; product for highly specific product terms; service page for service terms)
+  3) Most specific relevant page wins over broad pages (avoid mapping non-brand keywords to the homepage unless truly appropriate)
+- Reassign the losing URL(s) to the next-best non-duplicate keyword that still passes the relevance gate.
+
+### Step 5: Final output formatting check
+Before output:
+- Confirm there are zero duplicate keywords across different URLs.
+- Confirm every row has all required columns populated (Parent Topic can be blank only if unavailable, but try to include it).
+
+## Output Requirement (Strict)
+Return ONLY a CSV (no commentary, no markdown) with this exact header and columns:
+URL,Keyword,Search Volume,Keyword Difficulty,CPC,Parent Topic,Intent
+
+${formattedUrls ? `\nURLs:\n${formattedUrls}` : ""}`;
 };
 
 const prompt3Template = () => `# Keyword Analysis, Scoring & Clustering Prompt
