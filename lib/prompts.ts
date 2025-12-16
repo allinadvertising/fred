@@ -37,7 +37,7 @@ const prompt1Template = (values: FormValues) => {
   return `## Client Inputs
 - **CLIENT_NAME:** ${clientName}
 - **CLIENT_URL (starting point):** ${clientUrl}
-- **TARGET MARKET (required for Ahrefs):** ${targetMarket}
+- **TARGET MARKET:** ${targetMarket}
 - **BUSINESS_TYPE (optional):** ${businessType}
 - **KNOWN_PRODUCTS/SERVICES (optional):** ${knownProducts}
 - **FOCUS (optional):** ${focus}
@@ -56,7 +56,7 @@ Research public information about **${clientName}** from the web (starting from 
 - Ideal Customer Profiles (ICPs)
 
 ## Non-negotiable rules
-1. Use web research. Do not rely on prior knowledge.
+1. Do not use Ahrefs or any other MCP APIs; rely solely on publicly available web research (no prior-knowledge assumptions).
 2. No hallucinations. If a detail cannot be verified, mark it as **Unknown** and explain what you could not confirm.
 3. Cite every key claim with a source URL (inline citations preferred).
 4. Prioritize primary sources (the company website, official social profiles, retailer listings, press coverage from reputable outlets).
@@ -216,7 +216,7 @@ You are an SEO keyword strategist. Your job is to assign keywords to specific UR
 - URLs: (see list at bottom)
 
 ## Primary Goal
-Produce a keyword-to-URL mapping where each keyword is assigned to exactly one best-fit URL, with high topical relevance and clear intent alignment.
+Produce a keyword-to-URL mapping where each keyword is assigned to exactly one best-fit URL, with high topical relevance and clear intent alignment. For each URL, provide no more than 6 total keywords (1 primary/main keyword and up to 5 closely related halo keywords).
 
 ## Non-Negotiable Rules (Hard Constraints)
 1. One keyword maps to one URL only.
@@ -230,6 +230,7 @@ Produce a keyword-to-URL mapping where each keyword is assigned to exactly one b
    - Informational keywords should map to guides/blog resources (not pure product pages), unless the page itself is informational.
 4. If two URLs could plausibly target the same keyword, you must pick one “canonical target URL” and select an alternative keyword for the other URL(s).
 5. If the Ahrefs API fails globally (no data returned or repeated outage responses), stop immediately and report: "Ahrefs API is having issues. please try again in 10 minutes".
+6. Per URL, cap the final selection to 6 total keywords: 1 main keyword + up to 5 halo/supporting keywords. If fewer than 6 relevant, non-duplicative keywords pass validation, return only the ones that qualify.
 
 ## Required Workflow (Follow in Order)
 ### Step 1: Understand each URL before choosing keywords
@@ -252,6 +253,7 @@ For each candidate, collect:
 - CPC
 - Parent Topic
 - Intent (Informational, Commercial, Transactional, Navigational)
+Stop after selecting one primary keyword and up to five halo keywords per URL that best fit the page topic and intent.
 
 ### Step 3: Relevance Validation Gate (must pass to be eligible)
 A keyword can be assigned to a URL only if BOTH are true:
@@ -268,10 +270,12 @@ After generating candidates across all URLs:
   2) Best page-type fit (category for broad head terms; product for highly specific product terms; service page for service terms)
   3) Most specific relevant page wins over broad pages (avoid mapping non-brand keywords to the homepage unless truly appropriate)
 - Reassign the losing URL(s) to the next-best non-duplicate keyword that still passes the relevance gate.
+- After de-duplication, ensure each URL still has no more than 6 total assigned keywords (1 main + up to 5 halo). Drop the lowest-value options if needed to stay within the cap.
 
 ### Step 5: Final output formatting check
 Before output:
 - Confirm there are zero duplicate keywords across different URLs.
+- Confirm each URL has no more than 6 keyword rows (1 main + up to 5 halo).
 - Confirm every row has all required columns populated (Parent Topic can be blank only if unavailable, but try to include it).
 
 ## Output Requirement (Strict)
