@@ -252,7 +252,7 @@ Classify each URL as one of:
 Using Ahrefs Keywords Explorer (for ${targetMarket}), generate candidates that are tightly related to that URL's topic.
 For each candidate, collect:
 - Search Volume
-- Keyword Difficulty
+- Keyword Difficulty (from Ahrefs; if missing, output 0)
 - CPC
 - Parent Topic
 - Intent (Informational, Commercial, Transactional, Navigational)
@@ -280,6 +280,7 @@ Before output:
 - Confirm there are zero duplicate keywords across different URLs.
 - Confirm each URL has no more than 6 keyword rows (1 main + up to 5 halo).
 - Confirm every row has all required columns populated (Parent Topic can be blank only if unavailable, but try to include it).
+- Keyword Difficulty must be the exact Ahrefs value; if unavailable, output 0.
 
 ## Output Requirement (Strict)
 Return ONLY a CSV (no commentary, no markdown) with this exact header and columns:
