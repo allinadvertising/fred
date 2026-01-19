@@ -285,6 +285,7 @@ Before output:
 ## Output Requirement (Strict)
 Return ONLY a CSV (no commentary, no markdown) with this exact header and columns:
 URL,Keyword,Search Volume,Keyword Difficulty,CPC,Parent Topic,Intent
+If the CSV is long, keep generating until the full CSV is complete in a single response. Do not stop early or ask to continue.
 
 ${formattedUrls ? `\nURLs:\n${formattedUrls}` : ""}`;
 };
@@ -347,7 +348,8 @@ Each subsequent row should represent one unique URL, structured as:
 
 ### Final requirement
 
-Return ONLY the final consolidated CSV (header + rows) following the structure above, with no additional explanation or formatting.`;
+Return ONLY the final consolidated CSV (header + rows) following the structure above, with no additional explanation or formatting.
+If the CSV is long, keep generating until the full CSV is complete in a single response. Do not stop early or ask to continue.`;
 
 export const promptDefinitions: PromptDefinition[] = [
   {
