@@ -222,15 +222,18 @@ Produce a keyword-to-URL mapping where each keyword is assigned to exactly one b
 1. One keyword maps to one URL only.
    - You must not assign the same keyword to multiple URLs.
    - This includes near-duplicates and close variants (singular/plural, word order, minor modifiers) that represent the same query intent.
-2. No random associations.
+2. All URLs must appear in the output CSV.
+   - Do not remove or ignore any URL from the provided list.
+   - If a URL lacks a perfect commercial match, assign the closest informational keyword instead.
+3. No random associations.
    - Do not map a keyword to a URL unless the URL's content clearly matches the product/service/topic expressed by the keyword.
    - Example: “vacuum forming machine” must not be mapped to an “infrared oven” page unless the page is actually about vacuum forming machines.
-3. Intent alignment is mandatory.
+4. Intent alignment is mandatory.
    - Transactional keywords should map to product, collection/category, or service pages (not unrelated informational pages).
    - Informational keywords should map to guides/blog resources (not pure product pages), unless the page itself is informational.
-4. If two URLs could plausibly target the same keyword, you must pick one “canonical target URL” and select an alternative keyword for the other URL(s).
-5. If the Ahrefs API fails globally (no data returned or repeated outage responses), stop immediately and report: "Ahrefs API is having issues. please try again in 10 minutes".
-6. Per URL, cap the final selection to 6 total keywords: 1 main keyword + up to 5 halo/supporting keywords. If fewer than 6 relevant, non-duplicative keywords pass validation, return only the ones that qualify.
+5. If two URLs could plausibly target the same keyword, you must pick one “canonical target URL” and select an alternative keyword for the other URL(s).
+6. If the Ahrefs API fails globally (no data returned or repeated outage responses), stop immediately and report: "Ahrefs API is having issues. please try again in 10 minutes".
+7. Per URL, cap the final selection to 6 total keywords: 1 main keyword + up to 5 halo/supporting keywords. If fewer than 6 relevant, non-duplicative keywords pass validation, return only the ones that qualify.
 
 ## Required Workflow (Follow in Order)
 ### Step 1: Understand each URL before choosing keywords
@@ -243,7 +246,7 @@ Classify each URL as one of:
 - Category / Collection
 - Product / SKU
 - Service page
-- Blog / Resource
+- Blog / Resource (include all URLs regardless of page type)
 
 ### Step 2: Build a candidate keyword set per URL using Ahrefs
 Using Ahrefs Keywords Explorer (for ${targetMarket}), generate candidates that are tightly related to that URL's topic.
