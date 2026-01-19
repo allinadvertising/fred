@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
-import Papa from 'papaparse';
+import { buildSfCsv, findColumn, normalizeUrlForFetch, parseCsvText, type CsvRow } from '@/lib/csv';
 
 type Options = {
   gen_title: boolean;
@@ -17,8 +17,6 @@ type EnvCheck = {
 };
 
 type ProgressStage = 'idle' | 'scraping' | 'generating' | 'done';
-
-type CsvRow = Record<string, string>;
 
 type ScrapeResult = {
   url: string;
@@ -42,48 +40,7 @@ const getFilename = (headers: Headers) => {
   return match?.[1] ?? 'meta_suggestions.csv';
 };
 
-const normalizeUrlForFetch = (value: string) => {
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  try {
-    const withScheme = trimmed.startsWith('http') ? trimmed : `http://${trimmed}`;
-    const parsed = new URL(withScheme);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
-    return parsed.toString();
-  } catch {
-    return '';
-  }
-};
-
-const findColumn = (fields: string[], candidates: string[]) => {
-  const lookup = new Map(fields.map((field) => [field.toLowerCase(), field]));
-  for (const candidate of candidates) {
-    const match = lookup.get(candidate.toLowerCase());
-    if (match) return match;
-  }
-  return null;
-};
-
-const escapeCsv = (value: string) => {
-  const raw = value ?? '';
-  if (/[",\n\r]/.test(raw)) {
-    return `"${raw.replace(/"/g, '""')}"`;
-  }
-  return raw;
-};
-
-const buildSfCsv = (rows: Array<Record<string, string>>) => {
-  const header = ['Address', 'Title 1', 'Meta Description 1', 'H1-1'];
-  const lines = [header.join(',')];
-  for (const row of rows) {
-    lines.push(
-      header
-        .map((key) => escapeCsv(row[key] ?? ''))
-        .join(',')
-    );
-  }
-  return lines.join('\n');
-};
+const buildKwCsvError = (message: string) => `Could not parse CSV: ${message}`;
 
 const mapWithConcurrency = async <T, R>(
   items: T[],
@@ -181,18 +138,15 @@ export default function MetadataCreationPage() {
       setProgress('scraping', 5, 'Parsing keyword mapping CSV...');
 
       const kwCsvText = await kwFile.text();
-      const parsed = Papa.parse<Record<string, unknown>>(kwCsvText, {
-        header: true,
-        skipEmptyLines: true
-      });
+      const parsed = parseCsvText(kwCsvText);
 
       if (parsed.errors.length > 0) {
         setProgress('idle', 0, '');
-        setError(`Could not parse CSV: ${parsed.errors[0]?.message ?? 'Unknown error.'}`);
+        setError(buildKwCsvError(parsed.errors[0] ?? 'Unknown error.'));
         return;
       }
 
-      const fields = parsed.meta.fields ?? Object.keys(parsed.data[0] ?? {});
+      const fields = parsed.fields;
       const urlColumn = findColumn(fields, ['URL', 'Address', 'Url', 'url', 'address']);
       const keywordColumn = findColumn(fields, ['Keyword', 'keyword', 'KW', 'Primary Keyword']);
 
@@ -202,15 +156,7 @@ export default function MetadataCreationPage() {
         return;
       }
 
-      const kwRows: CsvRow[] = parsed.data
-        .map((row) => {
-          const normalized: CsvRow = {};
-          fields.forEach((field) => {
-            normalized[field] = row[field] == null ? '' : String(row[field]);
-          });
-          return normalized;
-        })
-        .filter((row) => Object.values(row).some((value) => value.trim() !== ''));
+      const kwRows: CsvRow[] = parsed.rows;
 
       const fetchUrls = kwRows
         .map((row) => normalizeUrlForFetch(row[urlColumn] ?? ''))
