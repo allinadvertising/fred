@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
+import Papa from 'papaparse';
 
 type Options = {
   gen_title: boolean;
@@ -13,6 +14,17 @@ type Options = {
 type EnvCheck = {
   test_mode?: boolean;
   model?: string;
+};
+
+type ProgressStage = 'idle' | 'scraping' | 'generating' | 'done';
+
+type CsvRow = Record<string, string>;
+
+type ScrapeResult = {
+  url: string;
+  metaTitle: string;
+  metaDescription: string;
+  metaH1?: string;
 };
 
 const DEFAULT_OPTIONS: Options = {
@@ -30,6 +42,67 @@ const getFilename = (headers: Headers) => {
   return match?.[1] ?? 'meta_suggestions.csv';
 };
 
+const normalizeUrlForFetch = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  try {
+    const withScheme = trimmed.startsWith('http') ? trimmed : `http://${trimmed}`;
+    const parsed = new URL(withScheme);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+    return parsed.toString();
+  } catch {
+    return '';
+  }
+};
+
+const findColumn = (fields: string[], candidates: string[]) => {
+  const lookup = new Map(fields.map((field) => [field.toLowerCase(), field]));
+  for (const candidate of candidates) {
+    const match = lookup.get(candidate.toLowerCase());
+    if (match) return match;
+  }
+  return null;
+};
+
+const escapeCsv = (value: string) => {
+  const raw = value ?? '';
+  if (/[",\n\r]/.test(raw)) {
+    return `"${raw.replace(/"/g, '""')}"`;
+  }
+  return raw;
+};
+
+const buildSfCsv = (rows: Array<Record<string, string>>) => {
+  const header = ['Address', 'Title 1', 'Meta Description 1', 'H1-1'];
+  const lines = [header.join(',')];
+  for (const row of rows) {
+    lines.push(
+      header
+        .map((key) => escapeCsv(row[key] ?? ''))
+        .join(',')
+    );
+  }
+  return lines.join('\n');
+};
+
+const mapWithConcurrency = async <T, R>(
+  items: T[],
+  limit: number,
+  iterator: (item: T, index: number) => Promise<R>
+) => {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const current = nextIndex++;
+      results[current] = await iterator(items[current], current);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+};
+
 export default function MetadataCreationPage() {
   const [kwFile, setKwFile] = useState<File | null>(null);
   const [options, setOptions] = useState<Options>(DEFAULT_OPTIONS);
@@ -37,6 +110,9 @@ export default function MetadataCreationPage() {
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [envCheck, setEnvCheck] = useState<EnvCheck | null>(null);
+  const [progressStage, setProgressStage] = useState<ProgressStage>('idle');
+  const [progressValue, setProgressValue] = useState(0);
+  const [progressMessage, setProgressMessage] = useState('');
 
   useEffect(() => {
     let active = true;
@@ -51,28 +127,134 @@ export default function MetadataCreationPage() {
     };
   }, []);
 
+  const setProgress = (stage: ProgressStage, value: number, message: string) => {
+    setProgressStage(stage);
+    setProgressValue(value);
+    setProgressMessage(message);
+  };
+
+  const scrapeUrl = async (url: string) => {
+    try {
+      const response = await fetch('/api/scrape/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      });
+
+      if (!response.ok) {
+        return { url, metaTitle: '', metaDescription: '', metaH1: '' } satisfies ScrapeResult;
+      }
+
+      const data = (await response.json()) as ScrapeResult;
+      return {
+        url: data.url ?? url,
+        metaTitle: data.metaTitle ?? '',
+        metaDescription: data.metaDescription ?? '',
+        metaH1: data.metaH1 ?? ''
+      } satisfies ScrapeResult;
+    } catch (err) {
+      console.error('Scrape error', err);
+      return { url, metaTitle: '', metaDescription: '', metaH1: '' } satisfies ScrapeResult;
+    }
+  };
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError('');
     setStatus('');
+    setProgress('idle', 0, '');
 
     if (!kwFile) {
       setError('Please upload the keyword mapping CSV.');
       return;
     }
 
-    const formData = new FormData();
-    formData.append('kw_csv', kwFile);
-    Object.entries(options).forEach(([key, value]) => {
-      formData.append(key, value ? 'true' : 'false');
-    });
-
     setIsSubmitting(true);
 
     try {
+      setProgress('scraping', 5, 'Parsing keyword mapping CSV...');
+
+      const kwCsvText = await kwFile.text();
+      const parsed = Papa.parse<Record<string, unknown>>(kwCsvText, {
+        header: true,
+        skipEmptyLines: true
+      });
+
+      if (parsed.errors.length > 0) {
+        setProgress('idle', 0, '');
+        setError(`Could not parse CSV: ${parsed.errors[0]?.message ?? 'Unknown error.'}`);
+        return;
+      }
+
+      const fields = parsed.meta.fields ?? Object.keys(parsed.data[0] ?? {});
+      const urlColumn = findColumn(fields, ['URL', 'Address', 'Url', 'url', 'address']);
+      const keywordColumn = findColumn(fields, ['Keyword', 'keyword', 'KW', 'Primary Keyword']);
+
+      if (!urlColumn || !keywordColumn) {
+        setProgress('idle', 0, '');
+        setError('Keyword mapping must include URL (or Address) and Keyword columns.');
+        return;
+      }
+
+      const kwRows: CsvRow[] = parsed.data
+        .map((row) => {
+          const normalized: CsvRow = {};
+          fields.forEach((field) => {
+            normalized[field] = row[field] == null ? '' : String(row[field]);
+          });
+          return normalized;
+        })
+        .filter((row) => Object.values(row).some((value) => value.trim() !== ''));
+
+      const fetchUrls = kwRows
+        .map((row) => normalizeUrlForFetch(row[urlColumn] ?? ''))
+        .filter((value) => value);
+      const uniqueUrls = Array.from(new Set(fetchUrls));
+
+      if (uniqueUrls.length === 0) {
+        setProgress('idle', 0, '');
+        setError('No valid URLs found in the keyword mapping CSV.');
+        return;
+      }
+
+      setProgress('scraping', 10, `Scraping URLs (0/${uniqueUrls.length})`);
+      let completed = 0;
+      const scrapeResults = new Map<string, ScrapeResult>();
+      const scrapeStart = 10;
+      const scrapeEnd = 80;
+
+      await mapWithConcurrency(uniqueUrls, 3, async (url) => {
+        const result = await scrapeUrl(url);
+        scrapeResults.set(url, result);
+        completed += 1;
+        const progress =
+          scrapeStart + Math.round((completed / uniqueUrls.length) * (scrapeEnd - scrapeStart));
+        setProgress('scraping', progress, `Scraping URLs (${completed}/${uniqueUrls.length})`);
+      });
+
+      const sfRows = kwRows.map((row) => {
+        const rawUrl = row[urlColumn] ?? '';
+        const fetchUrl = normalizeUrlForFetch(rawUrl);
+        const meta = fetchUrl ? scrapeResults.get(fetchUrl) : undefined;
+
+        return {
+          Address: rawUrl,
+          'Title 1': meta?.metaTitle ?? '',
+          'Meta Description 1': meta?.metaDescription ?? '',
+          'H1-1': meta?.metaH1 ?? ''
+        };
+      });
+
+      setProgress('generating', 85, 'Generating metadata with AI...');
+
       const response = await fetch('/api/metadata?format=csv', {
         method: 'POST',
-        body: formData
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kw_csv: kwCsvText,
+          sf_csv: buildSfCsv(sfRows),
+          ...options
+        })
       });
 
       if (!response.ok) {
@@ -83,6 +265,7 @@ export default function MetadataCreationPage() {
         } else {
           setError('Could not generate metadata.');
         }
+        setProgress('idle', 0, '');
         return;
       }
 
@@ -97,9 +280,11 @@ export default function MetadataCreationPage() {
       anchor.remove();
       window.URL.revokeObjectURL(url);
       setStatus('Download ready. Your metadata file has been generated.');
+      setProgress('done', 100, 'Download ready. Your metadata file has been generated.');
     } catch (err) {
       console.error(err);
       setError('Unexpected error while generating metadata.');
+      setProgress('idle', 0, '');
     } finally {
       setIsSubmitting(false);
     }
@@ -136,6 +321,21 @@ export default function MetadataCreationPage() {
       {status && !error && (
         <div className="rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-5 py-4 text-sm text-emerald-100">
           {status}
+        </div>
+      )}
+
+      {progressStage !== 'idle' && (
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/60 px-5 py-4 text-sm text-slate-200">
+          <div className="flex items-center justify-between text-sm">
+            <span>{progressMessage}</span>
+            <span className="text-slate-400">{progressValue}%</span>
+          </div>
+          <div className="mt-3 h-2 w-full rounded-full bg-slate-800">
+            <div
+              className="h-2 rounded-full bg-accent transition-all"
+              style={{ width: `${progressValue}%` }}
+            />
+          </div>
         </div>
       )}
 

@@ -8,6 +8,7 @@ type ScrapeResult = {
   url: string;
   metaTitle: string;
   metaDescription: string;
+  metaH1: string;
 };
 
 type ScrapeRequest = {
@@ -59,11 +60,13 @@ const buildCrawler = (onResult: (result: ScrapeResult) => void) => {
             $('meta[name="description"]').attr('content')?.trim() ??
             $('meta[property="og:description"]').attr('content')?.trim() ??
             '';
+          const h1 = $('h1').first().text().trim();
 
           const result: ScrapeResult = {
             url: response.url || request.url,
             metaTitle: title,
-            metaDescription: description
+            metaDescription: description,
+            metaH1: h1
           };
 
           onResult(result);
