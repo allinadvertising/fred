@@ -263,7 +263,7 @@ export default function KwrProcessPage() {
 
         const validUrls = normalizedUrls
           .filter((entry) => entry.normalized && statusMap.get(entry.normalized) === 200)
-          .map((entry) => entry.normalized as string);
+          .map((entry) => entry.raw);
 
         if (non200.length > 0) {
           setNon200Items(non200);
