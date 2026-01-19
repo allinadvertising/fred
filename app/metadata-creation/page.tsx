@@ -31,7 +31,6 @@ const getFilename = (headers: Headers) => {
 };
 
 export default function MetadataCreationPage() {
-  const [sfFile, setSfFile] = useState<File | null>(null);
   const [kwFile, setKwFile] = useState<File | null>(null);
   const [options, setOptions] = useState<Options>(DEFAULT_OPTIONS);
   const [status, setStatus] = useState('');
@@ -57,13 +56,12 @@ export default function MetadataCreationPage() {
     setError('');
     setStatus('');
 
-    if (!sfFile || !kwFile) {
-      setError('Please upload both CSV files.');
+    if (!kwFile) {
+      setError('Please upload the keyword mapping CSV.');
       return;
     }
 
     const formData = new FormData();
-    formData.append('sf_csv', sfFile);
     formData.append('kw_csv', kwFile);
     Object.entries(options).forEach(([key, value]) => {
       formData.append(key, value ? 'true' : 'false');
@@ -114,7 +112,8 @@ export default function MetadataCreationPage() {
           <p className="text-sm uppercase tracking-[0.25em] text-slate-400">Metadata Creation</p>
           <h1 className="text-3xl font-semibold text-white md:text-4xl">Metadata Generator</h1>
           <p className="max-w-3xl text-base text-slate-300">
-            Upload the two CSVs, choose what to generate, and download the results as a new CSV.
+            Upload the keyword mapping CSV, choose what to generate, and download the results as a
+            new CSV.
           </p>
         </div>
       </header>
@@ -144,34 +143,16 @@ export default function MetadataCreationPage() {
         <p className="text-sm text-slate-300">
           <span className="font-semibold text-slate-100">Required columns</span>
           <br />
-          <span className="text-slate-400">Screaming Frog export:</span>{' '}
-          <span className="rounded bg-slate-900/70 px-1 text-xs">Address</span>{' '}
-          <span className="rounded bg-slate-900/70 px-1 text-xs">Title 1</span>{' '}
-          <span className="rounded bg-slate-900/70 px-1 text-xs">Meta Description 1</span>{' '}
-          <span className="rounded bg-slate-900/70 px-1 text-xs">H1-1</span>
-          <br />
           <span className="text-slate-400">Keyword mapping:</span>{' '}
           <span className="rounded bg-slate-900/70 px-1 text-xs">URL</span>{' '}
           <span className="rounded bg-slate-900/70 px-1 text-xs">Keyword</span>
         </p>
+        <p className="mt-3 text-sm text-slate-400">
+          We will scrape each URL to capture the current meta title, meta description, and H1 to
+          use as context for generation.
+        </p>
 
         <form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-6">
-          <div className="flex flex-col gap-2">
-            <label className="label" htmlFor="sf_csv">
-              Screaming Frog CSV
-            </label>
-            <input
-              id="sf_csv"
-              name="sf_csv"
-              type="file"
-              accept=".csv"
-              className="rounded-xl border border-slate-700 bg-slate-900/70 px-4 py-3 text-sm text-slate-200 file:mr-4 file:rounded-lg file:border-0 file:bg-slate-800 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-slate-100"
-              required
-              onChange={(event) => setSfFile(event.target.files?.[0] ?? null)}
-            />
-            {sfFile && <p className="text-xs text-slate-400">Selected: {sfFile.name}</p>}
-          </div>
-
           <div className="flex flex-col gap-2">
             <label className="label" htmlFor="kw_csv">
               Keyword Mapping CSV

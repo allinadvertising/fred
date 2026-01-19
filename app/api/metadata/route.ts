@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import OpenAI, { APIConnectionError, APIError, RateLimitError } from 'openai';
 import { parse } from 'csv-parse/sync';
+import { load } from 'cheerio';
 
 export const runtime = 'nodejs';
 
@@ -196,15 +197,15 @@ async function parseRequest(request: Request) {
     const sfCsv = payload?.sf_csv;
     const kwCsv = payload?.kw_csv;
 
-    if (typeof sfCsv !== 'string' || typeof kwCsv !== 'string') {
-      throw new InputError('JSON payload must include sf_csv and kw_csv as strings.');
+    if (typeof kwCsv !== 'string') {
+      throw new InputError('JSON payload must include kw_csv as a string.');
     }
 
     const options = extractOptions(payload, null);
     const responseFormat = normalizeFormat(payload?.format ?? formatParam ?? 'json');
 
     return {
-      sfRows: parseCsv(sfCsv),
+      sfRows: typeof sfCsv === 'string' ? parseCsv(sfCsv) : null,
       kwRows: parseCsv(kwCsv),
       options,
       responseFormat
@@ -212,19 +213,22 @@ async function parseRequest(request: Request) {
   }
 
   const form = await request.formData();
-  const sfFile = form.get('sf_csv');
   const kwFile = form.get('kw_csv');
 
-  if (!(sfFile instanceof File) || !(kwFile instanceof File)) {
-    throw new InputError('Upload both sf_csv and kw_csv files.');
+  if (!(kwFile instanceof File)) {
+    throw new InputError('Upload the kw_csv file.');
   }
 
   const options = extractOptions(null, form);
   const responseFormat = normalizeFormat(form.get('format') ?? formatParam ?? 'json');
-  const [sfText, kwText] = await Promise.all([sfFile.text(), kwFile.text()]);
+  const sfFile = form.get('sf_csv');
+  const [sfText, kwText] = await Promise.all([
+    sfFile instanceof File ? sfFile.text() : Promise.resolve(''),
+    kwFile.text()
+  ]);
 
   return {
-    sfRows: parseCsv(sfText),
+    sfRows: sfText ? parseCsv(sfText) : null,
     kwRows: parseCsv(kwText),
     options,
     responseFormat
@@ -261,6 +265,18 @@ function normUrl(value: string): string {
   return normalized.replace(/^[a-z]+:\/\//i, '');
 }
 
+function ensureHttpUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  try {
+    const parsed = new URL(trimmed.startsWith('http') ? trimmed : `http://${trimmed}`);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+    return parsed.toString();
+  } catch {
+    return '';
+  }
+}
+
 function clamp(text: string, maxChars: number): string {
   if (!text) return text;
   if (text.length <= maxChars) return text;
@@ -279,6 +295,102 @@ function findColumn(rows: CsvRow[], candidates: string[]): string | null {
     if (match) return match;
   }
   return null;
+}
+
+type ScrapedMeta = {
+  title: string;
+  description: string;
+  h1: string;
+};
+
+async function scrapeMeta(url: string): Promise<ScrapedMeta> {
+  if (!url) {
+    return { title: '', description: '', h1: '' };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+
+  try {
+    const response = await fetch(url, {
+      redirect: 'follow',
+      headers: {
+        'user-agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        accept: 'text/html,application/xhtml+xml'
+      },
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      return { title: '', description: '', h1: '' };
+    }
+
+    const html = await response.text();
+    const $ = load(html);
+    const title = $('title').first().text().trim();
+    const description =
+      $('meta[name="description"]').attr('content')?.trim() ??
+      $('meta[property="og:description"]').attr('content')?.trim() ??
+      '';
+    const h1 = $('h1').first().text().trim();
+
+    return { title, description, h1 };
+  } catch {
+    return { title: '', description: '', h1: '' };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  iterator: (item: T, index: number) => Promise<R>
+) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  const workerCount = Math.min(limit, items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const current = nextIndex++;
+      results[current] = await iterator(items[current], current);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
+async function buildSfRowsFromKeywords(kwRows: CsvRow[]): Promise<CsvRow[]> {
+  const urlCol = findColumn(kwRows, ['URL', 'Address', 'Url', 'url', 'address']);
+  if (!urlCol) {
+    throw new InputError('Keyword mapping must include a URL column.');
+  }
+
+  const cache = new Map<string, Promise<ScrapedMeta>>();
+  const limit = 3;
+
+  return mapWithConcurrency(kwRows, limit, async (row) => {
+    const rawUrl = row[urlCol] ?? '';
+    const fetchUrl = ensureHttpUrl(rawUrl);
+
+    let metaPromise = cache.get(fetchUrl);
+    if (!metaPromise) {
+      metaPromise = scrapeMeta(fetchUrl);
+      cache.set(fetchUrl, metaPromise);
+    }
+
+    const meta = await metaPromise;
+
+    return {
+      Address: rawUrl,
+      'Title 1': meta.title,
+      'Meta Description 1': meta.description,
+      'H1-1': meta.h1
+    };
+  });
 }
 
 function buildPrompt(row: CsvRow, wantTitle: boolean, wantDesc: boolean, wantH1: boolean): string {
@@ -418,16 +530,22 @@ async function generateRows(sfRows: CsvRow[], kwRows: CsvRow[], options: Options
     throw new InputError('Keyword mapping must include URL (or Address) and Keyword columns.');
   }
 
+  const kwNormalized = kwRows.map((row) => ({
+    Address: row[urlCol] ?? '',
+    Keyword: row[kwCol] ?? ''
+  }));
+
   const keywordMap = new Map<string, string>();
-  for (const row of kwRows) {
-    const key = normUrl(row[urlCol] ?? '');
+  for (const row of kwNormalized) {
+    const key = normUrl(row.Address ?? '');
     if (!key) continue;
-    keywordMap.set(key, row[kwCol] ?? '');
+    keywordMap.set(key, row.Keyword ?? '');
   }
 
   const output: OutputRow[] = [];
+  const sfData = sfRows.length ? sfRows : await buildSfRowsFromKeywords(kwNormalized);
 
-  for (const row of sfRows) {
+  for (const row of sfData) {
     const address = row.Address ?? '';
     const key = normUrl(address);
     const keyword = keywordMap.get(key) ?? '';
@@ -482,7 +600,7 @@ async function generateRows(sfRows: CsvRow[], kwRows: CsvRow[], options: Options
 
 export async function GET() {
   return NextResponse.json({
-    message: 'POST sf_csv and kw_csv as multipart/form-data or JSON.',
+    message: 'POST kw_csv (and optional sf_csv) as multipart/form-data or JSON.',
     options: DEFAULT_OPTIONS,
     response_format: 'json or csv'
   });
@@ -505,7 +623,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const rows = await generateRows(parsed.sfRows, parsed.kwRows, parsed.options);
+    const rows = await generateRows(parsed.sfRows ?? [], parsed.kwRows, parsed.options);
 
     if (parsed.responseFormat === 'csv') {
       const csvText = rowsToCsv(rows);
