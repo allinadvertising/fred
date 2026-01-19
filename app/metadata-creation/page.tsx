@@ -105,6 +105,7 @@ const mapWithConcurrency = async <T, R>(
 
 export default function MetadataCreationPage() {
   const [kwFile, setKwFile] = useState<File | null>(null);
+  const [brandName, setBrandName] = useState('');
   const [options, setOptions] = useState<Options>(DEFAULT_OPTIONS);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
@@ -113,6 +114,7 @@ export default function MetadataCreationPage() {
   const [progressStage, setProgressStage] = useState<ProgressStage>('idle');
   const [progressValue, setProgressValue] = useState(0);
   const [progressMessage, setProgressMessage] = useState('');
+  const [skipScrape, setSkipScrape] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -168,6 +170,10 @@ export default function MetadataCreationPage() {
       setError('Please upload the keyword mapping CSV.');
       return;
     }
+    if (!brandName.trim()) {
+      setError('Please enter the Brand/Name.');
+      return;
+    }
 
     setIsSubmitting(true);
 
@@ -217,33 +223,45 @@ export default function MetadataCreationPage() {
         return;
       }
 
-      setProgress('scraping', 10, `Scraping URLs (0/${uniqueUrls.length})`);
-      let completed = 0;
-      const scrapeResults = new Map<string, ScrapeResult>();
-      const scrapeStart = 10;
-      const scrapeEnd = 80;
+      let sfRows: Array<Record<string, string>>;
 
-      await mapWithConcurrency(uniqueUrls, 3, async (url) => {
-        const result = await scrapeUrl(url);
-        scrapeResults.set(url, result);
-        completed += 1;
-        const progress =
-          scrapeStart + Math.round((completed / uniqueUrls.length) * (scrapeEnd - scrapeStart));
-        setProgress('scraping', progress, `Scraping URLs (${completed}/${uniqueUrls.length})`);
-      });
+      if (skipScrape) {
+        setProgress('generating', 40, 'Skipping metadata fetch. Preparing AI request...');
+        sfRows = kwRows.map((row) => ({
+          Address: row[urlColumn] ?? '',
+          'Title 1': '',
+          'Meta Description 1': '',
+          'H1-1': ''
+        }));
+      } else {
+        setProgress('scraping', 10, `Scraping URLs (0/${uniqueUrls.length})`);
+        let completed = 0;
+        const scrapeResults = new Map<string, ScrapeResult>();
+        const scrapeStart = 10;
+        const scrapeEnd = 80;
 
-      const sfRows = kwRows.map((row) => {
-        const rawUrl = row[urlColumn] ?? '';
-        const fetchUrl = normalizeUrlForFetch(rawUrl);
-        const meta = fetchUrl ? scrapeResults.get(fetchUrl) : undefined;
+        await mapWithConcurrency(uniqueUrls, 3, async (url) => {
+          const result = await scrapeUrl(url);
+          scrapeResults.set(url, result);
+          completed += 1;
+          const progress =
+            scrapeStart + Math.round((completed / uniqueUrls.length) * (scrapeEnd - scrapeStart));
+          setProgress('scraping', progress, `Scraping URLs (${completed}/${uniqueUrls.length})`);
+        });
 
-        return {
-          Address: rawUrl,
-          'Title 1': meta?.metaTitle ?? '',
-          'Meta Description 1': meta?.metaDescription ?? '',
-          'H1-1': meta?.metaH1 ?? ''
-        };
-      });
+        sfRows = kwRows.map((row) => {
+          const rawUrl = row[urlColumn] ?? '';
+          const fetchUrl = normalizeUrlForFetch(rawUrl);
+          const meta = fetchUrl ? scrapeResults.get(fetchUrl) : undefined;
+
+          return {
+            Address: rawUrl,
+            'Title 1': meta?.metaTitle ?? '',
+            'Meta Description 1': meta?.metaDescription ?? '',
+            'H1-1': meta?.metaH1 ?? ''
+          };
+        });
+      }
 
       setProgress('generating', 85, 'Generating metadata with AI...');
 
@@ -253,6 +271,7 @@ export default function MetadataCreationPage() {
         body: JSON.stringify({
           kw_csv: kwCsvText,
           sf_csv: buildSfCsv(sfRows),
+          brand: brandName.trim(),
           ...options
         })
       });
@@ -354,6 +373,22 @@ export default function MetadataCreationPage() {
 
         <form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-6">
           <div className="flex flex-col gap-2">
+            <label className="label" htmlFor="brand_name">
+              Brand/Name
+            </label>
+            <input
+              id="brand_name"
+              name="brand_name"
+              type="text"
+              value={brandName}
+              onChange={(event) => setBrandName(event.target.value)}
+              className="input"
+              placeholder="All in Advertising"
+              required
+            />
+          </div>
+
+          <div className="flex flex-col gap-2">
             <label className="label" htmlFor="kw_csv">
               Keyword Mapping CSV
             </label>
@@ -430,6 +465,16 @@ export default function MetadataCreationPage() {
               </label>
             </div>
           </fieldset>
+
+          <label className="flex items-center gap-3 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={skipScrape}
+              onChange={(event) => setSkipScrape(event.target.checked)}
+              className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-accent focus:ring-accent"
+            />
+            Don&apos;t fetch current metadata
+          </label>
 
           <p className="text-sm text-slate-400">
             We keep current values for any field you do not check.

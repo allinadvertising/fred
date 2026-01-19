@@ -26,13 +26,10 @@ type OutputRow = {
   Keyword: string;
   'Current Title': string;
   'New Title': string;
-  'Final Title': string;
   'Current Description': string;
   'New Description': string;
-  'Final Description': string;
   'Current H1': string;
   'New H1': string;
-  'Final H1': string;
 };
 
 const DEFAULT_OPTIONS: Options = {
@@ -48,13 +45,10 @@ const OUTPUT_COLUMNS: Array<keyof OutputRow> = [
   'Keyword',
   'Current Title',
   'New Title',
-  'Final Title',
   'Current Description',
   'New Description',
-  'Final Description',
   'Current H1',
-  'New H1',
-  'Final H1'
+  'New H1'
 ];
 
 const MODEL_NAME = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
@@ -85,6 +79,11 @@ function normalizeFormat(value: unknown): 'json' | 'csv' {
     return 'csv';
   }
   return 'json';
+}
+
+function normalizeBrand(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value.trim();
 }
 
 function getClient(): OpenAI {
@@ -196,9 +195,15 @@ async function parseRequest(request: Request) {
     const payload = (await request.json()) as Record<string, unknown>;
     const sfCsv = payload?.sf_csv;
     const kwCsv = payload?.kw_csv;
+    const brandValue = normalizeBrand(
+      payload?.brand ?? payload?.brand_name ?? payload?.brandName ?? ''
+    );
 
     if (typeof kwCsv !== 'string') {
       throw new InputError('JSON payload must include kw_csv as a string.');
+    }
+    if (!brandValue) {
+      throw new InputError('Brand/Name is required.');
     }
 
     const options = extractOptions(payload, null);
@@ -208,15 +213,20 @@ async function parseRequest(request: Request) {
       sfRows: typeof sfCsv === 'string' ? parseCsv(sfCsv) : null,
       kwRows: parseCsv(kwCsv),
       options,
-      responseFormat
+      responseFormat,
+      brand: brandValue
     };
   }
 
   const form = await request.formData();
   const kwFile = form.get('kw_csv');
+  const brandValue = normalizeBrand(form.get('brand') ?? form.get('brand_name'));
 
   if (!(kwFile instanceof File)) {
     throw new InputError('Upload the kw_csv file.');
+  }
+  if (!brandValue) {
+    throw new InputError('Brand/Name is required.');
   }
 
   const options = extractOptions(null, form);
@@ -231,7 +241,8 @@ async function parseRequest(request: Request) {
     sfRows: sfText ? parseCsv(sfText) : null,
     kwRows: parseCsv(kwText),
     options,
-    responseFormat
+    responseFormat,
+    brand: brandValue
   };
 }
 
@@ -295,6 +306,34 @@ function findColumn(rows: CsvRow[], candidates: string[]): string | null {
     if (match) return match;
   }
   return null;
+}
+
+function applyBrandSuffix(title: string, brand: string, maxChars: number, clampEnabled: boolean) {
+  const cleanedBrand = brand.trim();
+  if (!cleanedBrand) {
+    return clampEnabled ? clamp(title, maxChars) : title;
+  }
+
+  const suffix = ` | ${cleanedBrand}`;
+  let base = title.trim();
+
+  if (base.toLowerCase().endsWith(suffix.toLowerCase())) {
+    base = base.slice(0, Math.max(0, base.length - suffix.length)).trimEnd();
+  }
+
+  if (clampEnabled) {
+    const maxBaseLen = Math.max(0, maxChars - suffix.length);
+    if (maxBaseLen === 0) {
+      return cleanedBrand;
+    }
+    base = clamp(base, maxBaseLen);
+  }
+
+  if (!base) {
+    return cleanedBrand;
+  }
+
+  return `${base}${suffix}`;
 }
 
 type ScrapedMeta = {
@@ -393,12 +432,19 @@ async function buildSfRowsFromKeywords(kwRows: CsvRow[]): Promise<CsvRow[]> {
   });
 }
 
-function buildPrompt(row: CsvRow, wantTitle: boolean, wantDesc: boolean, wantH1: boolean): string {
+function buildPrompt(
+  row: CsvRow,
+  wantTitle: boolean,
+  wantDesc: boolean,
+  wantH1: boolean,
+  brand: string
+): string {
   const keyword = row.Keyword ?? '';
   const currentTitle = row['Title 1'] ?? '';
   const currentDesc = row['Meta Description 1'] ?? '';
   const currentH1 = row['H1-1'] ?? '';
   const url = row.Address ?? '';
+  const brandName = brand.trim();
 
   const targets: string[] = [];
   if (wantTitle) targets.push('title');
@@ -419,6 +465,7 @@ Rules:
 - Natural tone. No clickbait. No HTML. No quotes.
 - Put the keyword early in the title if natural.
 - Title target ~50-60 characters. Description target ~150-160.
+- Append " | ${brandName}" to the end of the title.
 
 Only optimize these fields: ${targets.join(', ')}.
 For any field not listed, return the original value unchanged.
@@ -513,16 +560,22 @@ async function callOpenAI(
   row: CsvRow,
   wantTitle: boolean,
   wantDesc: boolean,
-  wantH1: boolean
+  wantH1: boolean,
+  brand: string
 ): Promise<GeneratedFields> {
   if (TEST_MODE) {
     return localMock(row, wantTitle, wantDesc, wantH1);
   }
-  const prompt = buildPrompt(row, wantTitle, wantDesc, wantH1);
+  const prompt = buildPrompt(row, wantTitle, wantDesc, wantH1, brand);
   return openaiStructured(prompt);
 }
 
-async function generateRows(sfRows: CsvRow[], kwRows: CsvRow[], options: Options): Promise<OutputRow[]> {
+async function generateRows(
+  sfRows: CsvRow[],
+  kwRows: CsvRow[],
+  options: Options,
+  brand: string
+): Promise<OutputRow[]> {
   const urlCol = findColumn(kwRows, ['URL', 'Address', 'Url', 'url', 'address']);
   const kwCol = findColumn(kwRows, ['Keyword', 'keyword', 'KW', 'Primary Keyword']);
 
@@ -559,7 +612,13 @@ async function generateRows(sfRows: CsvRow[], kwRows: CsvRow[], options: Options
       'H1-1': row['H1-1'] ?? ''
     };
 
-    const data = await callOpenAI(workingRow, options.gen_title, options.gen_desc, options.gen_h1);
+    const data = await callOpenAI(
+      workingRow,
+      options.gen_title,
+      options.gen_desc,
+      options.gen_h1,
+      brand
+    );
 
     const currentTitle = workingRow['Title 1'] ?? '';
     const currentDesc = workingRow['Meta Description 1'] ?? '';
@@ -571,9 +630,11 @@ async function generateRows(sfRows: CsvRow[], kwRows: CsvRow[], options: Options
 
     let finalTitle = options.gen_title ? proposedTitle : currentTitle;
     let finalDesc = options.gen_desc ? proposedDesc : currentDesc;
-    let finalH1 = options.gen_h1 ? proposedH1 : currentH1;
+    const finalH1 = options.gen_h1 ? proposedH1 : currentH1;
 
-    if (options.clamp_title) {
+    if (options.gen_title) {
+      finalTitle = applyBrandSuffix(finalTitle, brand, 60, options.clamp_title);
+    } else if (options.clamp_title) {
       finalTitle = clamp(finalTitle, 60);
     }
     if (options.clamp_desc) {
@@ -584,14 +645,11 @@ async function generateRows(sfRows: CsvRow[], kwRows: CsvRow[], options: Options
       Address: address,
       Keyword: keyword,
       'Current Title': currentTitle,
-      'New Title': proposedTitle,
-      'Final Title': finalTitle,
+      'New Title': finalTitle,
       'Current Description': currentDesc,
-      'New Description': proposedDesc,
-      'Final Description': finalDesc,
+      'New Description': finalDesc,
       'Current H1': currentH1,
-      'New H1': proposedH1,
-      'Final H1': finalH1
+      'New H1': finalH1
     });
   }
 
@@ -600,7 +658,7 @@ async function generateRows(sfRows: CsvRow[], kwRows: CsvRow[], options: Options
 
 export async function GET() {
   return NextResponse.json({
-    message: 'POST kw_csv (and optional sf_csv) as multipart/form-data or JSON.',
+    message: 'POST kw_csv and brand (optional sf_csv) as multipart/form-data or JSON.',
     options: DEFAULT_OPTIONS,
     response_format: 'json or csv'
   });
@@ -623,7 +681,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const rows = await generateRows(parsed.sfRows ?? [], parsed.kwRows, parsed.options);
+    const rows = await generateRows(parsed.sfRows ?? [], parsed.kwRows, parsed.options, parsed.brand);
 
     if (parsed.responseFormat === 'csv') {
       const csvText = rowsToCsv(rows);

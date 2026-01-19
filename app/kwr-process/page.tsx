@@ -5,6 +5,49 @@ import { buildPromptOutputs, FormValues, PromptOutput, requiredFields } from '@/
 
 type FieldKey = keyof FormValues;
 
+type ProgressStage = 'idle' | 'validating' | 'generating' | 'done';
+
+type UrlStatus = {
+  url: string;
+  status: number;
+};
+
+const normalizeUrlForCheck = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  try {
+    const withScheme = trimmed.startsWith('http') ? trimmed : `http://${trimmed}`;
+    const parsed = new URL(withScheme);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+    return parsed.toString();
+  } catch {
+    return '';
+  }
+};
+
+const mapWithConcurrency = async <T, R>(
+  items: T[],
+  limit: number,
+  iterator: (item: T, index: number) => Promise<R>
+) => {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const current = nextIndex++;
+      results[current] = await iterator(items[current], current);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+};
+
+const getNon200CopyText = (items: Array<{ url: string; status: string }>) => {
+  const lines = ['URL,Status Code', ...items.map((item) => `${item.url},${item.status}`)];
+  return lines.join('\n');
+};
+
 const initialValues: FormValues = {
   clientName: '',
   clientUrl: '',
@@ -95,6 +138,13 @@ export default function KwrProcessPage() {
   const [promptOutputs, setPromptOutputs] = useState<PromptOutput[]>([]);
   const [hasGenerated, setHasGenerated] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [isValidating, setIsValidating] = useState(false);
+  const [progressStage, setProgressStage] = useState<ProgressStage>('idle');
+  const [progressValue, setProgressValue] = useState(0);
+  const [progressMessage, setProgressMessage] = useState('');
+  const [non200Items, setNon200Items] = useState<Array<{ url: string; status: string }>>([]);
+  const [showNon200Banner, setShowNon200Banner] = useState(false);
+  const [skipUrlChecks, setSkipUrlChecks] = useState(false);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -108,9 +158,147 @@ export default function KwrProcessPage() {
       return;
     }
 
-    setStatus('All required fields are valid. Prompts refreshed.');
-    setPromptOutputs(buildPromptOutputs(formValues));
-    setHasGenerated(true);
+    setStatus('');
+    setNon200Items([]);
+    setShowNon200Banner(false);
+    if (skipUrlChecks) {
+      setProgressStage('generating');
+      setProgressValue(85);
+      setProgressMessage('Building prompts without URL checks...');
+      setPromptOutputs(buildPromptOutputs(formValues));
+      setHasGenerated(true);
+      setProgressStage('done');
+      setProgressValue(100);
+      setProgressMessage('Prompts ready.');
+      setStatus('URL checks skipped. Prompts refreshed.');
+      return;
+    }
+
+    setProgressStage('validating');
+    setProgressValue(5);
+    setProgressMessage('Preparing URL validation...');
+    setIsValidating(true);
+
+    void (async () => {
+      try {
+        const rawUrls = formValues.keywordUrls
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+
+        const normalizedUrls = rawUrls.map((url) => ({
+          raw: url,
+          normalized: normalizeUrlForCheck(url)
+        }));
+
+        const invalidUrls = normalizedUrls.filter((entry) => !entry.normalized);
+        const uniqueUrls = Array.from(
+          new Set(normalizedUrls.map((entry) => entry.normalized).filter(Boolean))
+        );
+
+        if (uniqueUrls.length === 0) {
+          setProgressStage('idle');
+          setProgressValue(0);
+          setProgressMessage('');
+          setStatus('Please provide at least one valid URL.');
+          return;
+        }
+
+        setProgressMessage(`Validating URLs (0/${uniqueUrls.length})`);
+        setProgressValue(10);
+
+        const statusMap = new Map<string, number>();
+        let completed = 0;
+
+        await mapWithConcurrency(uniqueUrls, 5, async (url) => {
+          try {
+            const response = await fetch('/api/url-status/', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url })
+            });
+
+            if (response.ok) {
+              const data = (await response.json()) as UrlStatus;
+              statusMap.set(url, data.status ?? 0);
+            } else {
+              statusMap.set(url, 0);
+            }
+          } catch (err) {
+            console.error('URL status error', err);
+            statusMap.set(url, 0);
+          } finally {
+            completed += 1;
+            const progress = 10 + Math.round((completed / uniqueUrls.length) * 70);
+            setProgressValue(progress);
+            setProgressMessage(`Validating URLs (${completed}/${uniqueUrls.length})`);
+          }
+        });
+
+        const non200: Array<{ url: string; status: string }> = invalidUrls.map((entry) => ({
+          url: entry.raw,
+          status: 'invalid'
+        }));
+
+        let okCount = 0;
+        let redirectCount = 0;
+        let notFoundCount = 0;
+
+        normalizedUrls.forEach((entry) => {
+          if (!entry.normalized) return;
+          const statusCode = statusMap.get(entry.normalized) ?? 0;
+          if (statusCode === 200) okCount += 1;
+          else {
+            non200.push({
+              url: entry.raw,
+              status: String(statusCode || 'unknown')
+            });
+            if (statusCode === 301 || statusCode === 302 || statusCode === 307 || statusCode === 308) {
+              redirectCount += 1;
+            } else if (statusCode === 404) {
+              notFoundCount += 1;
+            }
+          }
+        });
+
+        const validUrls = normalizedUrls
+          .filter((entry) => entry.normalized && statusMap.get(entry.normalized) === 200)
+          .map((entry) => entry.normalized as string);
+
+        if (non200.length > 0) {
+          setNon200Items(non200);
+          setShowNon200Banner(true);
+        }
+
+        if (validUrls.length === 0) {
+          setStatus('No URLs returned status 200. See the validation banner for details.');
+          setProgressStage('idle');
+          setProgressValue(0);
+          setProgressMessage('');
+          return;
+        }
+
+        setProgressStage('generating');
+        setProgressValue(85);
+        setProgressMessage('Building prompts with verified URLs...');
+
+        const verifiedValues = {
+          ...formValues,
+          keywordUrls: validUrls.join('\n')
+        };
+
+        setPromptOutputs(buildPromptOutputs(verifiedValues));
+        setHasGenerated(true);
+        setProgressStage('done');
+        setProgressValue(100);
+        setProgressMessage('Prompts ready.');
+        setStatus(
+          `Validated ${uniqueUrls.length} URLs: ${okCount} OK, ${redirectCount} redirects, ${notFoundCount} not found.`
+        );
+      } finally {
+        setIsValidating(false);
+      }
+    })();
   };
 
   const missingOptionals = useMemo(
@@ -149,6 +337,21 @@ export default function KwrProcessPage() {
       </header>
 
       <section className="glass rounded-3xl border-slate-800 px-6 py-6 shadow-soft md:px-8 md:py-8">
+        {progressStage !== 'idle' && (
+          <div className="mb-6 rounded-2xl border border-slate-800 bg-slate-900/60 px-5 py-4 text-sm text-slate-200">
+            <div className="flex items-center justify-between text-sm">
+              <span>{progressMessage}</span>
+              <span className="text-slate-400">{progressValue}%</span>
+            </div>
+            <div className="mt-3 h-2 w-full rounded-full bg-slate-800">
+              <div
+                className="h-2 rounded-full bg-accent transition-all"
+                style={{ width: `${progressValue}%` }}
+              />
+            </div>
+          </div>
+        )}
+
         <form onSubmit={handleSubmit} className="flex flex-col gap-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -159,11 +362,22 @@ export default function KwrProcessPage() {
             </div>
             <button
               type="submit"
+              disabled={isValidating}
               className="rounded-xl bg-accent px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-accent/30 transition hover:-translate-y-[1px] hover:shadow-xl hover:shadow-accent/40 focus:outline-none focus:ring-2 focus:ring-accent/60"
             >
-              Validate & Generate
+              {isValidating ? 'Validating URLs...' : 'Validate & Generate'}
             </button>
           </div>
+
+          <label className="flex items-center gap-3 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={skipUrlChecks}
+              onChange={(event) => setSkipUrlChecks(event.target.checked)}
+              className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-accent focus:ring-accent"
+            />
+            Don&apos;t check URLs status
+          </label>
 
           <div className="grid gap-4 md:grid-cols-2">
             {fieldConfig.map((field) => (
@@ -242,6 +456,47 @@ export default function KwrProcessPage() {
           </div>
         </form>
       </section>
+
+      {showNon200Banner && non200Items.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-6 py-10">
+          <div className="w-full max-w-2xl rounded-3xl border border-slate-800 bg-slate-900 px-6 py-6 shadow-soft">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold text-white">Non-200 URLs detected</h2>
+                <p className="mt-1 text-sm text-slate-400">
+                  Copy the list below and fix or exclude these URLs.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowNon200Banner(false)}
+                className="rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-200"
+              >
+                Close
+              </button>
+            </div>
+
+            <textarea
+              readOnly
+              value={getNon200CopyText(non200Items)}
+              className="mt-4 h-40 w-full rounded-2xl border border-slate-800 bg-slate-950/70 p-4 text-xs text-slate-100"
+            />
+
+            <div className="mt-4 flex items-center justify-between">
+              <p className="text-xs text-slate-400">
+                {non200Items.length} URL(s) returned non-200 status.
+              </p>
+              <button
+                type="button"
+                onClick={() => navigator.clipboard.writeText(getNon200CopyText(non200Items))}
+                className="rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-slate-950"
+              >
+                Copy list
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <section className="grid gap-6">
         {hasGenerated ? (
