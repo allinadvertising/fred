@@ -22,7 +22,7 @@ const normalizeUrlForCheck = (value: string) => {
   const trimmed = value.trim();
   if (!trimmed) return '';
   try {
-    const withScheme = trimmed.startsWith('http') ? trimmed : `http://${trimmed}`;
+    const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
     const parsed = new URL(withScheme);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
     return parsed.toString();
@@ -309,7 +309,7 @@ export default function KwrProcessPage() {
 
         const validUrls = normalizedUrls
           .filter((entry) => entry.normalized && statusMap.get(entry.normalized) === 200)
-          .map((entry) => entry.raw);
+          .map((entry) => entry.normalized);
 
         if (non200.length > 0) {
           setNon200Items(non200);
