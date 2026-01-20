@@ -1,5 +1,6 @@
 import './globals.css';
 import type { Metadata } from 'next';
+import TopNav from './components/TopNav';
 
 export const metadata: Metadata = {
   title: 'Prompt Workbench',
@@ -9,7 +10,8 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="antialiased">
+      <body className="antialiased pt-20 md:pt-24">
+        <TopNav />
         {children}
       </body>
     </html>
