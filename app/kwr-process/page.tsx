@@ -12,6 +12,12 @@ type UrlStatus = {
   status: number;
 };
 
+type Non200Item = {
+  url: string;
+  status: string;
+  description: string;
+};
+
 const normalizeUrlForCheck = (value: string) => {
   const trimmed = value.trim();
   if (!trimmed) return '';
@@ -43,8 +49,44 @@ const mapWithConcurrency = async <T, R>(
   return results;
 };
 
-const getNon200CopyText = (items: Array<{ url: string; status: string }>) => {
-  const lines = ['URL,Status Code', ...items.map((item) => `${item.url},${item.status}`)];
+const csvEscape = (value: string) => {
+  const raw = value ?? '';
+  if (/[",\n\r]/.test(raw)) {
+    return `"${raw.replace(/"/g, '""')}"`;
+  }
+  return raw;
+};
+
+const describeStatus = (status: string) => {
+  const normalized = status.trim().toLowerCase();
+  if (!normalized) return 'No response or status unavailable.';
+  if (normalized === 'invalid') return 'Invalid URL; must be http(s).';
+  if (normalized === 'unknown' || normalized === '0') return 'No response or status unavailable.';
+
+  const code = Number(normalized);
+  if (!Number.isFinite(code)) return 'Non-200 response.';
+  if (code === 301) return 'Moved permanently; update to the new URL.';
+  if (code === 302) return 'Found (temporary redirect); consider updating URL.';
+  if (code === 307) return 'Temporary redirect; consider updating URL.';
+  if (code === 308) return 'Permanent redirect; update to the new URL.';
+  if (code === 400) return 'Bad request; check URL formatting.';
+  if (code === 401) return 'Unauthorized; authentication required.';
+  if (code === 403) return 'Forbidden; access denied.';
+  if (code === 404) return 'Not found; the URL does not exist.';
+  if (code === 408) return 'Request timeout; server took too long.';
+  if (code === 429) return 'Too many requests; rate limited.';
+  if (code >= 500 && code <= 599) return 'Server error; try again later.';
+  if (code >= 300 && code <= 399) return 'Redirected; update to final URL.';
+  return 'Non-200 response.';
+};
+
+const getNon200CopyText = (items: Non200Item[]) => {
+  const lines = [
+    'URL,Status Code,Description',
+    ...items.map((item) =>
+      [item.url, item.status, item.description].map(csvEscape).join(',')
+    )
+  ];
   return lines.join('\n');
 };
 
@@ -142,9 +184,10 @@ export default function KwrProcessPage() {
   const [progressStage, setProgressStage] = useState<ProgressStage>('idle');
   const [progressValue, setProgressValue] = useState(0);
   const [progressMessage, setProgressMessage] = useState('');
-  const [non200Items, setNon200Items] = useState<Array<{ url: string; status: string }>>([]);
+  const [non200Items, setNon200Items] = useState<Non200Item[]>([]);
   const [showNon200Banner, setShowNon200Banner] = useState(false);
   const [skipUrlChecks, setSkipUrlChecks] = useState(false);
+  const [non200Copied, setNon200Copied] = useState(false);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -235,9 +278,10 @@ export default function KwrProcessPage() {
           }
         });
 
-        const non200: Array<{ url: string; status: string }> = invalidUrls.map((entry) => ({
+        const non200: Non200Item[] = invalidUrls.map((entry) => ({
           url: entry.raw,
-          status: 'invalid'
+          status: 'invalid',
+          description: describeStatus('invalid')
         }));
 
         let okCount = 0;
@@ -249,9 +293,11 @@ export default function KwrProcessPage() {
           const statusCode = statusMap.get(entry.normalized) ?? 0;
           if (statusCode === 200) okCount += 1;
           else {
+            const statusText = String(statusCode || 'unknown');
             non200.push({
               url: entry.raw,
-              status: String(statusCode || 'unknown')
+              status: statusText,
+              description: describeStatus(statusText)
             });
             if (statusCode === 301 || statusCode === 302 || statusCode === 307 || statusCode === 308) {
               redirectCount += 1;
@@ -314,6 +360,17 @@ export default function KwrProcessPage() {
       await navigator.clipboard.writeText(content);
       setCopiedId(id);
       setTimeout(() => setCopiedId(null), 1200);
+    } catch (error) {
+      console.error('Clipboard error', error);
+      setStatus('Copy failed. Please copy manually.');
+    }
+  };
+
+  const handleCopyNon200 = async () => {
+    try {
+      await navigator.clipboard.writeText(getNon200CopyText(non200Items));
+      setNon200Copied(true);
+      setTimeout(() => setNon200Copied(false), 1200);
     } catch (error) {
       console.error('Clipboard error', error);
       setStatus('Copy failed. Please copy manually.');
@@ -476,11 +533,29 @@ export default function KwrProcessPage() {
               </button>
             </div>
 
-            <textarea
-              readOnly
-              value={getNon200CopyText(non200Items)}
-              className="mt-4 h-40 w-full rounded-2xl border border-slate-800 bg-slate-950/70 p-4 text-xs text-slate-100"
-            />
+            <div className="mt-4 max-h-56 overflow-auto rounded-2xl border border-slate-800">
+              <table className="w-full border-collapse text-left text-xs text-slate-200">
+                <thead className="bg-slate-950/70 text-slate-300">
+                  <tr>
+                    <th className="px-3 py-2 font-semibold">URL</th>
+                    <th className="px-3 py-2 font-semibold">Status Code</th>
+                    <th className="px-3 py-2 font-semibold">Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {non200Items.map((item, index) => (
+                    <tr
+                      key={`${item.url}-${item.status}-${index}`}
+                      className="border-t border-slate-800"
+                    >
+                      <td className="px-3 py-2 text-slate-100">{item.url}</td>
+                      <td className="px-3 py-2 text-slate-200">{item.status}</td>
+                      <td className="px-3 py-2 text-slate-400">{item.description}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
             <div className="mt-4 flex items-center justify-between">
               <p className="text-xs text-slate-400">
@@ -488,10 +563,12 @@ export default function KwrProcessPage() {
               </p>
               <button
                 type="button"
-                onClick={() => navigator.clipboard.writeText(getNon200CopyText(non200Items))}
-                className="rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-slate-950"
+                onClick={handleCopyNon200}
+                className={`rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-slate-950 transition ${
+                  non200Copied ? 'scale-105 shadow-lg shadow-accent/30' : 'hover:-translate-y-[1px]'
+                }`}
               >
-                Copy list
+                {non200Copied ? 'Copied!' : 'Copy list'}
               </button>
             </div>
           </div>
