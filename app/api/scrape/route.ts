@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { BasicCrawler, Configuration } from '@crawlee/basic';
 import { load } from 'cheerio';
 
 export const runtime = 'nodejs';
@@ -27,56 +26,48 @@ const normalizeUrl = (value: string) => {
   }
 };
 
-const buildCrawler = (onResult: (result: ScrapeResult) => void) => {
-  const config = new Configuration({ persistStorage: false, purgeOnStart: true });
+const scrapeUrl = async (url: string): Promise<ScrapeResult> => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
 
-  return new BasicCrawler(
-    {
-      maxRequestsPerCrawl: 1,
-      maxRequestRetries: 1,
-      requestHandlerTimeoutSecs: 30,
-      async requestHandler({ request }) {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(url, {
+      redirect: 'follow',
+      headers: {
+        'user-agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        accept: 'text/html,application/xhtml+xml'
+      },
+      signal: controller.signal
+    });
 
-        try {
-          const response = await fetch(request.url, {
-            redirect: 'follow',
-            headers: {
-              'user-agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
-            },
-            signal: controller.signal
-          });
+    if (!response.ok) {
+      throw new Error(`Request failed with status ${response.status}`);
+    }
 
-          if (!response.ok) {
-            throw new Error(`Request failed with status ${response.status}`);
-          }
+    const html = await response.text();
+    const $ = load(html);
+    const title = $('title').first().text().trim();
+    const description =
+      $('meta[name="description"]').attr('content')?.trim() ??
+      $('meta[property="og:description"]').attr('content')?.trim() ??
+      '';
+    const h1 = $('h1').first().text().trim();
 
-          const html = await response.text();
-          const $ = load(html);
-          const title = $('title').first().text().trim();
-          const description =
-            $('meta[name="description"]').attr('content')?.trim() ??
-            $('meta[property="og:description"]').attr('content')?.trim() ??
-            '';
-          const h1 = $('h1').first().text().trim();
-
-          const result: ScrapeResult = {
-            url: response.url || request.url,
-            metaTitle: title,
-            metaDescription: description,
-            metaH1: h1
-          };
-
-          onResult(result);
-        } finally {
-          clearTimeout(timeout);
-        }
-      }
-    },
-    config
-  );
+    return {
+      url: response.url || url,
+      metaTitle: title,
+      metaDescription: description,
+      metaH1: h1
+    };
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Request timed out while fetching the URL.');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 };
 
 export async function GET() {
@@ -98,21 +89,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'A valid http(s) URL is required.' }, { status: 400 });
   }
 
-  let result: ScrapeResult | null = null;
-  const crawler = buildCrawler((data) => {
-    result = data;
-  });
-
   try {
-    await crawler.run([url]);
+    const result = await scrapeUrl(url);
+    return NextResponse.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to scrape the URL.';
     return NextResponse.json({ error: message }, { status: 500 });
   }
-
-  if (!result) {
-    return NextResponse.json({ error: 'No data extracted from the URL.' }, { status: 500 });
-  }
-
-  return NextResponse.json(result);
 }
