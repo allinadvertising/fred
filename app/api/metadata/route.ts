@@ -13,6 +13,21 @@ type GeneratedFields = {
   h1: string;
 };
 
+type TargetField = keyof GeneratedFields;
+type BrandPolicy = 'always' | 'conditional' | 'never';
+
+type MetadataRunContext = {
+  url: string;
+  keyword: string;
+  currentTitle: string;
+  currentDesc: string;
+  currentH1: string;
+  brandName: string;
+  targets: TargetField[];
+  brandPolicy: BrandPolicy;
+  maxCoreTitleChars: number;
+};
+
 type Options = {
   gen_title: boolean;
   gen_desc: boolean;
@@ -50,6 +65,11 @@ const OUTPUT_COLUMNS: Array<keyof OutputRow> = [
   'Current H1',
   'New H1'
 ];
+
+const TITLE_HARD_MAX = 60;
+const TITLE_CORE_MIN = 35;
+const DESCRIPTION_HARD_MAX = 160;
+const BAD_TITLE_STOP_WORDS = ['to', 'for', 'and', 'with', 'of', 'in'];
 
 const MODEL_NAME = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
 const TEST_MODE = isTruthy(process.env.META_TEST_MODE);
@@ -291,10 +311,12 @@ function ensureHttpUrl(value: string): string {
 function clamp(text: string, maxChars: number): string {
   if (!text) return text;
   if (text.length <= maxChars) return text;
-  const cut = text.slice(0, maxChars + 1);
-  const lastSpace = cut.lastIndexOf(' ');
-  const trimmed = lastSpace > 0 ? cut.slice(0, lastSpace) : cut;
-  return trimmed.replace(/[ .,!;:?\"-]+$/g, '');
+  const cut = text.slice(0, maxChars);
+  const prevChar = text.charAt(maxChars - 1);
+  const nextChar = text.charAt(maxChars);
+  const brokeWord = /\S/.test(prevChar) && /\S/.test(nextChar);
+  const trimmed = brokeWord ? cut.replace(/\s+\S*$/g, '') : cut;
+  return trimmed.replace(/[ .,!;:?\"-]+$/g, '').trim();
 }
 
 function findColumn(rows: CsvRow[], candidates: string[]): string | null {
@@ -308,32 +330,243 @@ function findColumn(rows: CsvRow[], candidates: string[]): string | null {
   return null;
 }
 
-function applyBrandSuffix(title: string, brand: string, maxChars: number, clampEnabled: boolean) {
-  const cleanedBrand = brand.trim();
-  if (!cleanedBrand) {
-    return clampEnabled ? clamp(title, maxChars) : title;
+function normalizeWhitespace(text: string): string {
+  return (text ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeToken(text: string): string {
+  return normalizeWhitespace(text).toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function toPathname(value: string): string {
+  const raw = normalizeWhitespace(value);
+  if (!raw) return '';
+
+  if (raw.startsWith('/')) {
+    return raw.toLowerCase();
   }
 
-  const suffix = ` | ${cleanedBrand}`;
-  let base = title.trim();
-
-  if (base.toLowerCase().endsWith(suffix.toLowerCase())) {
-    base = base.slice(0, Math.max(0, base.length - suffix.length)).trimEnd();
+  const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    return new URL(withProtocol).pathname.toLowerCase() || '/';
+  } catch {
+    const slashIndex = raw.indexOf('/');
+    if (slashIndex >= 0) {
+      return raw.slice(slashIndex).toLowerCase();
+    }
+    return '/';
   }
+}
+
+function computeBrandPolicy({
+  url,
+  keyword,
+  brandName
+}: {
+  url: string;
+  keyword: string;
+  brandName: string;
+}): BrandPolicy {
+  const pathname = toPathname(url);
+  const k = normalizeWhitespace(keyword).toLowerCase();
+  const brandCompact = normalizeToken(brandName);
+  const keywordCompact = normalizeToken(keyword);
+
+  const isHome = pathname === '/' || pathname === '';
+
+  const commercialPaths = [
+    '/product',
+    '/products',
+    '/shop',
+    '/store',
+    '/collections',
+    '/category',
+    '/service',
+    '/services',
+    '/solutions',
+    '/pricing'
+  ];
+
+  const infoPaths = ['/blog', '/guide', '/guides', '/resources', '/learn', '/faq', '/how-to'];
+  const transactionalTerms = ['buy', 'price', 'quote', 'order', 'custom', 'near me', 'shipping'];
+
+  const isCommercial =
+    commercialPaths.some((path) => pathname.includes(path)) ||
+    transactionalTerms.some((term) => k.includes(term));
+  const isInformational = infoPaths.some((path) => pathname.includes(path));
+  const isBrandedKeyword = Boolean(brandCompact) && keywordCompact.includes(brandCompact);
+
+  if (isHome) return 'never';
+  if (isBrandedKeyword) return 'always';
+  if (isCommercial) return 'always';
+  if (isInformational) return 'conditional';
+  return 'conditional';
+}
+
+function computeMaxCoreTitleChars({
+  brandPolicy,
+  brandName
+}: {
+  brandPolicy: BrandPolicy;
+  brandName: string;
+}): number {
+  const suffix = ` | ${normalizeWhitespace(brandName)}`;
+  const brandLen = brandPolicy === 'never' ? 0 : suffix.length;
+  return Math.max(TITLE_CORE_MIN, TITLE_HARD_MAX - brandLen);
+}
+
+function getTargetsFromOptions(options: Options): TargetField[] {
+  const targets: TargetField[] = [];
+  if (options.gen_title) targets.push('title');
+  if (options.gen_desc) targets.push('description');
+  if (options.gen_h1) targets.push('h1');
+  return targets.length ? targets : ['title', 'description', 'h1'];
+}
+
+function enrichMetadataContext(
+  row: CsvRow,
+  targets: TargetField[],
+  brandName: string
+): MetadataRunContext {
+  const ctxBase = {
+    url: row.Address ?? '',
+    keyword: row.Keyword ?? '',
+    currentTitle: row['Title 1'] ?? '',
+    currentDesc: row['Meta Description 1'] ?? '',
+    currentH1: row['H1-1'] ?? '',
+    brandName: normalizeWhitespace(brandName),
+    targets
+  };
+
+  const brandPolicy = computeBrandPolicy({
+    url: ctxBase.url,
+    keyword: ctxBase.keyword,
+    brandName: ctxBase.brandName
+  });
+
+  const maxCoreTitleChars = computeMaxCoreTitleChars({
+    brandPolicy,
+    brandName: ctxBase.brandName
+  });
+
+  return {
+    ...ctxBase,
+    brandPolicy,
+    maxCoreTitleChars
+  };
+}
+
+function stripBrandVariants(title: string, brandName: string): string {
+  const t = normalizeWhitespace(title);
+  const b = normalizeWhitespace(brandName);
+  if (!t || !b) return t;
+
+  const escaped = b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const spacedPattern = escaped.split('').join('\\s*');
+  const spacedRe = new RegExp(spacedPattern, 'ig');
+  const exactRe = new RegExp(`\\b${escaped}\\b`, 'ig');
+
+  return t
+    .replace(exactRe, '')
+    .replace(spacedRe, '')
+    .replace(/\s+\|\s*$/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function endsWithBadStopWord(core: string): boolean {
+  const stopWords = BAD_TITLE_STOP_WORDS.join('|');
+  return new RegExp(`\\b(${stopWords})\\s*$`, 'i').test(core);
+}
+
+function trimTrailingStopWords(text: string): string {
+  let result = normalizeWhitespace(text);
+  const stopWords = BAD_TITLE_STOP_WORDS.join('|');
+  const stopWordPattern = new RegExp(`\\b(${stopWords})\\s*$`, 'i');
+
+  while (endsWithBadStopWord(result)) {
+    result = result.replace(stopWordPattern, '').trim();
+  }
+
+  return result;
+}
+
+function removeDanglingDelimiters(text: string): string {
+  return normalizeWhitespace(text).replace(/\s*[\|\-–—:]\s*$/g, '').trim();
+}
+
+function trimToWordBoundary(text: string, maxChars: number): string {
+  if (!text) return '';
+  if (text.length <= maxChars) return text.trim();
+
+  let out = text.slice(0, maxChars).trim();
+  const prevChar = text.charAt(maxChars - 1);
+  const nextChar = text.charAt(maxChars);
+  if (/\S/.test(prevChar) && /\S/.test(nextChar)) {
+    const trimmed = out.replace(/\s+\S*$/g, '').trim();
+    if (trimmed) out = trimmed;
+  }
+
+  return out;
+}
+
+function enforceTitle({
+  title,
+  brandName,
+  brandPolicy,
+  maxCoreTitleChars,
+  clampEnabled
+}: {
+  title: string;
+  brandName: string;
+  brandPolicy: BrandPolicy;
+  maxCoreTitleChars: number;
+  clampEnabled: boolean;
+}): string {
+  const normalizedBrand = normalizeWhitespace(brandName);
+  const suffix = normalizedBrand ? ` | ${normalizedBrand}` : '';
+  const maxCore = Math.max(TITLE_CORE_MIN, Math.min(maxCoreTitleChars, TITLE_HARD_MAX));
+  let core = normalizeWhitespace(title);
+  core = stripBrandVariants(core, normalizedBrand);
+  core = removeDanglingDelimiters(core);
+  core = trimTrailingStopWords(core);
 
   if (clampEnabled) {
-    const maxBaseLen = Math.max(0, maxChars - suffix.length);
-    if (maxBaseLen === 0) {
-      return cleanedBrand;
-    }
-    base = clamp(base, maxBaseLen);
+    core = trimToWordBoundary(core, maxCore);
+    core = trimTrailingStopWords(core);
   }
 
-  if (!base) {
-    return cleanedBrand;
+  if (brandPolicy === 'never' || !normalizedBrand) {
+    const noBrand = clampEnabled ? trimToWordBoundary(core, TITLE_HARD_MAX) : core;
+    return trimTrailingStopWords(removeDanglingDelimiters(noBrand));
   }
 
-  return `${base}${suffix}`;
+  const withBrand = normalizeWhitespace(`${core}${suffix}`);
+
+  if (brandPolicy === 'conditional') {
+    if (!clampEnabled) return withBrand;
+    if (withBrand.length <= TITLE_HARD_MAX) return withBrand;
+    return trimTrailingStopWords(removeDanglingDelimiters(trimToWordBoundary(core, TITLE_HARD_MAX)));
+  }
+
+  if (!clampEnabled) {
+    return withBrand;
+  }
+
+  if (withBrand.length <= TITLE_HARD_MAX) {
+    return withBrand;
+  }
+
+  const availableCore = Math.max(20, TITLE_HARD_MAX - suffix.length);
+  core = trimToWordBoundary(core, availableCore);
+  core = trimTrailingStopWords(removeDanglingDelimiters(core));
+
+  const forced = normalizeWhitespace(`${core}${suffix}`);
+  if (forced.length <= TITLE_HARD_MAX) {
+    return forced;
+  }
+
+  return trimToWordBoundary(forced, TITLE_HARD_MAX);
 }
 
 type ScrapedMeta = {
@@ -432,64 +665,83 @@ async function buildSfRowsFromKeywords(kwRows: CsvRow[]): Promise<CsvRow[]> {
   });
 }
 
-function buildPrompt(
-  row: CsvRow,
-  wantTitle: boolean,
-  wantDesc: boolean,
-  wantH1: boolean,
-  brand: string
-): string {
-  const keyword = row.Keyword ?? '';
-  const currentTitle = row['Title 1'] ?? '';
-  const currentDesc = row['Meta Description 1'] ?? '';
-  const currentH1 = row['H1-1'] ?? '';
-  const url = row.Address ?? '';
-  const brandName = brand.trim();
-
-  const targets: string[] = [];
-  if (wantTitle) targets.push('title');
-  if (wantDesc) targets.push('description');
-  if (wantH1) targets.push('h1');
-  if (targets.length === 0) targets.push('title', 'description', 'h1');
-
+function buildPrompt(context: MetadataRunContext): string {
   return `
 You are an expert SEO copywriter. Based on the inputs, propose improved metadata.
 
-URL: ${url}
-Keyword: ${keyword}
-Current Title: ${currentTitle}
-Current Description: ${currentDesc}
-Current H1: ${currentH1}
+URL: ${context.url}
+Keyword: ${context.keyword}
+Current Title: ${context.currentTitle}
+Current Description: ${context.currentDesc}
+Current H1: ${context.currentH1}
+Brand Name (exact spelling required): ${context.brandName}
+Brand Policy: ${context.brandPolicy}  // "always" | "conditional" | "never"
+Max Core Title Characters: ${context.maxCoreTitleChars}  // number, excludes the brand suffix
 
 Rules:
 - Natural tone. No clickbait. No HTML. No quotes.
-- Put the keyword early in the title if natural.
-- Title target ~50-60 characters. Description target ~150-160.
-- Append " | ${brandName}" to the end of the title.
+- Do not invent claims (pricing, awards, guarantees, "official") unless present in the inputs.
+- Only optimize these fields: ${context.targets.join(', ')}.
+- For any field not listed, return the original value unchanged.
+- Return strictly valid JSON with keys: "title", "description", "h1".
 
-Only optimize these fields: ${targets.join(', ')}.
-For any field not listed, return the original value unchanged.
-Return strictly valid JSON with keys: "title", "description", "h1".
+Title rules (only if "title" is in targets):
+1) Put the keyword early if natural. Do not force it.
+2) Uniqueness requirement:
+   - Title must be meaningfully unique for this URL.
+   - Include at least one differentiator derived from the URL slug and/or H1 (audience, use case, product type, number, year, material, format, etc.).
+   - Avoid generic templates that could apply to many pages.
+3) Brand usage (single mention, consistent spelling):
+   - Brand may appear at most once.
+   - If the existing or proposed title contains the brand in any form, remove it from the core title and only use the final suffix when brand is included.
+   - If brand is included, it must be appended exactly as: " | ${context.brandName}"
+4) Length and no truncation:
+   - Core title length must be <= Max Core Title Characters.
+   - The full title (including brand suffix if used) should be about 50 to 60 characters.
+   - Do not end with incomplete phrases or trailing stop-words like: "to", "for", "and", "with", "of", "in".
+   - Must be a complete thought and not cut mid-word.
+5) Apply Brand Policy:
+   - "always": append brand suffix, shorten core title if needed.
+   - "conditional": append brand suffix only if it fits without losing the differentiator or keyword placement.
+   - "never": do not include brand anywhere in the title.
+
+Description rules (only if "description" is in targets):
+- Target 150 to 160 characters.
+- Use the keyword or a close variant once if natural.
+- Add specific context from URL/H1. Avoid fluff. No incomplete sentences.
+
+H1 rules (only if "h1" is in targets):
+- Clear, human, aligned with page intent. Do not force the brand into H1.
 `.trim();
 }
 
-function localMock(row: CsvRow, wantTitle: boolean, wantDesc: boolean, wantH1: boolean): GeneratedFields {
-  const keyword = (row.Keyword ?? '').trim();
-  const h1 = (row['H1-1'] ?? '').trim();
-  const currentTitle = (row['Title 1'] ?? '').trim();
-  const currentDesc = (row['Meta Description 1'] ?? '').trim();
+function getSlugHint(url: string): string {
+  const path = toPathname(url);
+  const parts = path
+    .split('/')
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  const slug = parts[parts.length - 1] ?? '';
+  return slug.replace(/[-_]+/g, ' ').trim();
+}
 
-  const titleSrc = h1 || currentTitle || 'Quality Products';
-  const descSrc = currentDesc || `Explore ${keyword} and related collections.`;
+function localMock(context: MetadataRunContext): GeneratedFields {
+  const keyword = normalizeWhitespace(context.keyword);
+  const currentTitle = normalizeWhitespace(context.currentTitle);
+  const currentDesc = normalizeWhitespace(context.currentDesc);
+  const currentH1 = normalizeWhitespace(context.currentH1);
+  const slugHint = getSlugHint(context.url);
 
-  const proposedTitle = keyword ? `${keyword}: ${titleSrc}` : titleSrc;
-  const proposedDesc = keyword ? `${keyword} - ${descSrc}` : descSrc;
-  const proposedH1 = h1 || (keyword ? keyword : titleSrc);
+  const titleParts = [keyword, currentH1 || slugHint].filter(Boolean);
+  const mockTitle = titleParts.length ? titleParts.join(' - ') : currentTitle || 'Updated Metadata';
+  const mockDesc =
+    currentDesc || `Explore ${keyword || slugHint || 'this page'} with practical details and next steps.`;
+  const mockH1 = currentH1 || keyword || slugHint || 'Updated H1';
 
   return {
-    title: wantTitle ? proposedTitle : currentTitle,
-    description: wantDesc ? proposedDesc : currentDesc,
-    h1: wantH1 ? proposedH1 : h1
+    title: context.targets.includes('title') ? mockTitle : context.currentTitle,
+    description: context.targets.includes('description') ? mockDesc : context.currentDesc,
+    h1: context.targets.includes('h1') ? mockH1 : context.currentH1
   };
 }
 
@@ -556,17 +808,11 @@ async function openaiStructured(prompt: string): Promise<GeneratedFields> {
   return { title: '', description: '', h1: '' };
 }
 
-async function callOpenAI(
-  row: CsvRow,
-  wantTitle: boolean,
-  wantDesc: boolean,
-  wantH1: boolean,
-  brand: string
-): Promise<GeneratedFields> {
+async function callOpenAI(context: MetadataRunContext): Promise<GeneratedFields> {
   if (TEST_MODE) {
-    return localMock(row, wantTitle, wantDesc, wantH1);
+    return localMock(context);
   }
-  const prompt = buildPrompt(row, wantTitle, wantDesc, wantH1, brand);
+  const prompt = buildPrompt(context);
   return openaiStructured(prompt);
 }
 
@@ -597,6 +843,7 @@ async function generateRows(
 
   const output: OutputRow[] = [];
   const sfData = sfRows.length ? sfRows : await buildSfRowsFromKeywords(kwNormalized);
+  const targets = getTargetsFromOptions(options);
 
   for (const row of sfData) {
     const address = row.Address ?? '';
@@ -612,13 +859,8 @@ async function generateRows(
       'H1-1': row['H1-1'] ?? ''
     };
 
-    const data = await callOpenAI(
-      workingRow,
-      options.gen_title,
-      options.gen_desc,
-      options.gen_h1,
-      brand
-    );
+    const context = enrichMetadataContext(workingRow, targets, brand);
+    const data = await callOpenAI(context);
 
     const currentTitle = workingRow['Title 1'] ?? '';
     const currentDesc = workingRow['Meta Description 1'] ?? '';
@@ -628,17 +870,23 @@ async function generateRows(
     const proposedDesc = (data.description ?? '').trim();
     const proposedH1 = (data.h1 ?? '').trim();
 
-    let finalTitle = options.gen_title ? proposedTitle : currentTitle;
-    let finalDesc = options.gen_desc ? proposedDesc : currentDesc;
-    const finalH1 = options.gen_h1 ? proposedH1 : currentH1;
+    let finalTitle = options.gen_title ? proposedTitle || currentTitle : currentTitle;
+    let finalDesc = options.gen_desc ? proposedDesc || currentDesc : currentDesc;
+    const finalH1 = options.gen_h1 ? proposedH1 || currentH1 : currentH1;
 
     if (options.gen_title) {
-      finalTitle = applyBrandSuffix(finalTitle, brand, 60, options.clamp_title);
+      finalTitle = enforceTitle({
+        title: finalTitle,
+        brandName: context.brandName,
+        brandPolicy: context.brandPolicy,
+        maxCoreTitleChars: context.maxCoreTitleChars,
+        clampEnabled: options.clamp_title
+      });
     } else if (options.clamp_title) {
-      finalTitle = clamp(finalTitle, 60);
+      finalTitle = clamp(finalTitle, TITLE_HARD_MAX);
     }
     if (options.clamp_desc) {
-      finalDesc = clamp(finalDesc, 160);
+      finalDesc = clamp(finalDesc, DESCRIPTION_HARD_MAX);
     }
 
     output.push({
