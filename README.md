@@ -72,3 +72,30 @@ The suite includes unit tests, API route tests, and basic UI tests.
 ## Notes
 - Prompts are defined in `lib/prompts.ts`. The `/prompts` folder contains human-readable copies.
 - The Ahrefs prompt expects a chatbot session with an Ahrefs MCP server; Claude is the only verified client so far.
+
+## Change Log
+
+### 2026-02-10 - Issue: metatitles "cut off" and branded terms.
+
+- Added a real pre-prompt context enrichment step in `app/api/metadata/route.ts` (`enrichMetadataContext`) that computes:
+  - `brandPolicy` from URL path, keyword intent signals, and branded keyword detection
+  - `maxCoreTitleChars` from a 60-char hard max minus optional brand suffix length, with a 35-char safety floor
+  - `targets` from selected generation options (`title`, `description`, `h1`)
+
+- Updated the metadata prompt builder to pass and use:
+  - `Brand Name (exact spelling required)`
+  - `Brand Policy`
+  - `Max Core Title Characters`
+  - Expanded rules for uniqueness, single brand mention, and no truncation.
+
+- Replaced suffix-only title handling with post-generation enforcement (`enforceTitle`) that now:
+  - Removes brand variants from the core title before final formatting
+  - Applies policy-driven behavior (`always`, `conditional`, `never`)
+  - Enforces one exact suffix format when brand is used: ` | {brandName}`
+  - Removes trailing stop-word endings (`to`, `for`, `and`, `with`, `of`, `in`)
+  - Avoids mid-word truncation and keeps max length at 60 chars.
+
+- Added API test coverage in `tests/api/metadata.test.ts` to verify:
+  - Commercial pages include the brand suffix exactly once
+  - Homepage titles omit the brand
+  - Titles do not end in blocked trailing stop words.
