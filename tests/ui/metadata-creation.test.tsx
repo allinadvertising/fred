@@ -28,4 +28,12 @@ describe('metadata creation page', () => {
 
     expect(await screen.findByText(/Please enter the Brand\/Name/i)).toBeInTheDocument();
   });
+
+  it('shows a checkbox to bypass the pipe-brand suffix', async () => {
+    render(<MetadataCreationPage />);
+
+    expect(
+      await screen.findByRole('checkbox', { name: /Bypass .*Brand Name.*suffix/i })
+    ).toBeInTheDocument();
+  });
 });

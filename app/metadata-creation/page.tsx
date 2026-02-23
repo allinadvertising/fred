@@ -9,6 +9,7 @@ type Options = {
   gen_h1: boolean;
   clamp_title: boolean;
   clamp_desc: boolean;
+  bypass_brand_suffix: boolean;
 };
 
 type EnvCheck = {
@@ -30,7 +31,8 @@ const DEFAULT_OPTIONS: Options = {
   gen_desc: true,
   gen_h1: false,
   clamp_title: true,
-  clamp_desc: true
+  clamp_desc: true,
+  bypass_brand_suffix: false
 };
 
 const getFilename = (headers: Headers) => {
@@ -397,7 +399,7 @@ export default function MetadataCreationPage() {
                     setOptions((prev) => ({ ...prev, clamp_title: event.target.checked }))
                   }
                 />
-                Clamp title to 60 chars
+                Keep title near 60 chars (allow up to 70)
               </label>
               <label className="flex items-center gap-2">
                 <input
@@ -408,6 +410,16 @@ export default function MetadataCreationPage() {
                   }
                 />
                 Clamp description to 160 chars
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={options.bypass_brand_suffix}
+                  onChange={(event) =>
+                    setOptions((prev) => ({ ...prev, bypass_brand_suffix: event.target.checked }))
+                  }
+                />
+                Bypass <code>| Brand Name</code> suffix
               </label>
             </div>
           </fieldset>

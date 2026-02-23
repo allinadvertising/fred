@@ -26,6 +26,7 @@ type MetadataRunContext = {
   targets: TargetField[];
   brandPolicy: BrandPolicy;
   maxCoreTitleChars: number;
+  bypassBrandSuffix: boolean;
 };
 
 type Options = {
@@ -34,6 +35,7 @@ type Options = {
   gen_h1: boolean;
   clamp_title: boolean;
   clamp_desc: boolean;
+  bypass_brand_suffix: boolean;
 };
 
 type OutputRow = {
@@ -52,7 +54,8 @@ const DEFAULT_OPTIONS: Options = {
   gen_desc: true,
   gen_h1: false,
   clamp_title: true,
-  clamp_desc: true
+  clamp_desc: true,
+  bypass_brand_suffix: false
 };
 
 const OUTPUT_COLUMNS: Array<keyof OutputRow> = [
@@ -66,7 +69,8 @@ const OUTPUT_COLUMNS: Array<keyof OutputRow> = [
   'New H1'
 ];
 
-const TITLE_HARD_MAX = 60;
+const TITLE_SOFT_TARGET = 60;
+const TITLE_HARD_MAX = 70;
 const TITLE_CORE_MIN = 35;
 const DESCRIPTION_HARD_MAX = 160;
 const BAD_TITLE_STOP_WORDS = ['to', 'for', 'and', 'with', 'of', 'in'];
@@ -405,13 +409,15 @@ function computeBrandPolicy({
 
 function computeMaxCoreTitleChars({
   brandPolicy,
-  brandName
+  brandName,
+  bypassBrandSuffix
 }: {
   brandPolicy: BrandPolicy;
   brandName: string;
+  bypassBrandSuffix: boolean;
 }): number {
   const suffix = ` | ${normalizeWhitespace(brandName)}`;
-  const brandLen = brandPolicy === 'never' ? 0 : suffix.length;
+  const brandLen = brandPolicy === 'never' || bypassBrandSuffix ? 0 : suffix.length;
   return Math.max(TITLE_CORE_MIN, TITLE_HARD_MAX - brandLen);
 }
 
@@ -426,7 +432,8 @@ function getTargetsFromOptions(options: Options): TargetField[] {
 function enrichMetadataContext(
   row: CsvRow,
   targets: TargetField[],
-  brandName: string
+  brandName: string,
+  options: Options
 ): MetadataRunContext {
   const ctxBase = {
     url: row.Address ?? '',
@@ -446,13 +453,15 @@ function enrichMetadataContext(
 
   const maxCoreTitleChars = computeMaxCoreTitleChars({
     brandPolicy,
-    brandName: ctxBase.brandName
+    brandName: ctxBase.brandName,
+    bypassBrandSuffix: options.bypass_brand_suffix
   });
 
   return {
     ...ctxBase,
     brandPolicy,
-    maxCoreTitleChars
+    maxCoreTitleChars,
+    bypassBrandSuffix: options.bypass_brand_suffix
   };
 }
 
@@ -515,19 +524,26 @@ function enforceTitle({
   brandName,
   brandPolicy,
   maxCoreTitleChars,
-  clampEnabled
+  clampEnabled,
+  bypassBrandSuffix
 }: {
   title: string;
   brandName: string;
   brandPolicy: BrandPolicy;
   maxCoreTitleChars: number;
   clampEnabled: boolean;
+  bypassBrandSuffix: boolean;
 }): string {
   const normalizedBrand = normalizeWhitespace(brandName);
   const suffix = normalizedBrand ? ` | ${normalizedBrand}` : '';
   const maxCore = Math.max(TITLE_CORE_MIN, Math.min(maxCoreTitleChars, TITLE_HARD_MAX));
   let core = normalizeWhitespace(title);
-  core = stripBrandVariants(core, normalizedBrand);
+
+  // If the user bypasses the pipe-brand suffix, keep branded terms in the core title
+  // except on pages where brandPolicy requires removing brand entirely.
+  if (!bypassBrandSuffix || brandPolicy === 'never') {
+    core = stripBrandVariants(core, normalizedBrand);
+  }
   core = removeDanglingDelimiters(core);
   core = trimTrailingStopWords(core);
 
@@ -536,7 +552,7 @@ function enforceTitle({
     core = trimTrailingStopWords(core);
   }
 
-  if (brandPolicy === 'never' || !normalizedBrand) {
+  if (bypassBrandSuffix || brandPolicy === 'never' || !normalizedBrand) {
     const noBrand = clampEnabled ? trimToWordBoundary(core, TITLE_HARD_MAX) : core;
     return trimTrailingStopWords(removeDanglingDelimiters(noBrand));
   }
@@ -557,6 +573,10 @@ function enforceTitle({
     return withBrand;
   }
 
+  if (suffix.length >= TITLE_HARD_MAX) {
+    return trimTrailingStopWords(removeDanglingDelimiters(trimToWordBoundary(core, TITLE_HARD_MAX)));
+  }
+
   const availableCore = Math.max(20, TITLE_HARD_MAX - suffix.length);
   core = trimToWordBoundary(core, availableCore);
   core = trimTrailingStopWords(removeDanglingDelimiters(core));
@@ -566,7 +586,7 @@ function enforceTitle({
     return forced;
   }
 
-  return trimToWordBoundary(forced, TITLE_HARD_MAX);
+  return trimTrailingStopWords(removeDanglingDelimiters(trimToWordBoundary(core, TITLE_HARD_MAX)));
 }
 
 type ScrapedMeta = {
@@ -676,10 +696,11 @@ Current Description: ${context.currentDesc}
 Current H1: ${context.currentH1}
 Brand Name (exact spelling required): ${context.brandName}
 Brand Policy: ${context.brandPolicy}  // "always" | "conditional" | "never"
+Bypass Brand Suffix (" | Brand Name"): ${context.bypassBrandSuffix ? 'true' : 'false'}
 Max Core Title Characters: ${context.maxCoreTitleChars}  // number, excludes the brand suffix
 
 Rules:
-- Natural tone. No clickbait. No HTML. No quotes.
+- Natural, specific, compelling tone. No clickbait. No HTML. No quotes.
 - Do not invent claims (pricing, awards, guarantees, "official") unless present in the inputs.
 - Only optimize these fields: ${context.targets.join(', ')}.
 - For any field not listed, return the original value unchanged.
@@ -687,22 +708,26 @@ Rules:
 
 Title rules (only if "title" is in targets):
 1) Put the keyword early if natural. Do not force it.
+   - Prioritize the most compelling complete wording over robotic exact-length matching.
 2) Uniqueness requirement:
    - Title must be meaningfully unique for this URL.
    - Include at least one differentiator derived from the URL slug and/or H1 (audience, use case, product type, number, year, material, format, etc.).
    - Avoid generic templates that could apply to many pages.
 3) Brand usage (single mention, consistent spelling):
    - Brand may appear at most once.
-   - If the existing or proposed title contains the brand in any form, remove it from the core title and only use the final suffix when brand is included.
-   - If brand is included, it must be appended exactly as: " | ${context.brandName}"
+   - If Bypass Brand Suffix is false and the existing or proposed title contains the brand in any form, remove it from the core title and only use the final suffix when brand is included.
+   - If Bypass Brand Suffix is false and brand is included, it must be appended exactly as: " | ${context.brandName}"
+   - If Bypass Brand Suffix is true, do not append the pipe suffix. Brand may still appear naturally in the title if required by the keyword/page intent.
 4) Length and no truncation:
    - Core title length must be <= Max Core Title Characters.
-   - The full title (including brand suffix if used) should be about 50 to 60 characters.
+   - The full title should target about ${TITLE_SOFT_TARGET} characters.
+   - It may reach up to ${TITLE_HARD_MAX} characters when needed to preserve the keyword and a complete compelling phrase.
+   - Do not cut wording just to force an exact character limit.
    - Do not end with incomplete phrases or trailing stop-words like: "to", "for", "and", "with", "of", "in".
    - Must be a complete thought and not cut mid-word.
 5) Apply Brand Policy:
-   - "always": append brand suffix, shorten core title if needed.
-   - "conditional": append brand suffix only if it fits without losing the differentiator or keyword placement.
+   - "always": append brand suffix only when Bypass Brand Suffix is false; shorten core title if needed.
+   - "conditional": append brand suffix only if Bypass Brand Suffix is false and it fits without losing the differentiator or keyword placement.
    - "never": do not include brand anywhere in the title.
 
 Description rules (only if "description" is in targets):
@@ -859,7 +884,7 @@ async function generateRows(
       'H1-1': row['H1-1'] ?? ''
     };
 
-    const context = enrichMetadataContext(workingRow, targets, brand);
+    const context = enrichMetadataContext(workingRow, targets, brand, options);
     const data = await callOpenAI(context);
 
     const currentTitle = workingRow['Title 1'] ?? '';
@@ -880,7 +905,8 @@ async function generateRows(
         brandName: context.brandName,
         brandPolicy: context.brandPolicy,
         maxCoreTitleChars: context.maxCoreTitleChars,
-        clampEnabled: options.clamp_title
+        clampEnabled: options.clamp_title,
+        bypassBrandSuffix: options.bypass_brand_suffix
       });
     } else if (options.clamp_title) {
       finalTitle = clamp(finalTitle, TITLE_HARD_MAX);
