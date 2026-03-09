@@ -75,27 +75,32 @@ The suite includes unit tests, API route tests, and basic UI tests.
 
 ## Change Log
 
-### 2026-02-10 - Issue: metatitles "cut off" and branded terms.
+### 2026-03-09 - Meta title pipeline switched to rewrite-first QA.
 
-- Added a real pre-prompt context enrichment step in `app/api/metadata/route.ts` (`enrichMetadataContext`) that computes:
-  - `brandPolicy` from URL path, keyword intent signals, and branded keyword detection
-  - `maxCoreTitleChars` from a 60-char hard max minus optional brand suffix length, with a 35-char safety floor
-  - `targets` from selected generation options (`title`, `description`, `h1`)
+- The metadata pipeline in `app/api/metadata/route.ts` now treats title length as a validation target, not a clipping rule.
+- Preferred title range is `55` to `65` characters.
+- Fallback title range is `66` to `70` characters only when shortening the title would weaken keyword fidelity or create an incomplete phrase.
+- Final titles are validated before output for:
+  - keyword fidelity to the primary keyword
+  - semantic completeness
+  - natural endings with no dangling separators or clipped phrases
+  - brand-policy compliance
 
-- Updated the metadata prompt builder to pass and use:
-  - `Brand Name (exact spelling required)`
-  - `Brand Policy`
-  - `Max Core Title Characters`
-  - Expanded rules for uniqueness, single brand mention, and no truncation.
+- The title flow is now:
+  - generate the first draft
+  - validate the draft
+  - send failed drafts through an AI editor / rewrite pass
+  - revalidate the rewritten title before delivery
 
-- Replaced suffix-only title handling with post-generation enforcement (`enforceTitle`) that now:
-  - Removes brand variants from the core title before final formatting
-  - Applies policy-driven behavior (`always`, `conditional`, `never`)
-  - Enforces one exact suffix format when brand is used: ` | {brandName}`
-  - Removes trailing stop-word endings (`to`, `for`, `and`, `with`, `of`, `in`)
-  - Avoids mid-word truncation and keeps max length at 60 chars.
+- The runtime no longer mechanically trims or clips final titles.
+  - Overlength titles are rewritten.
+  - Short thin titles are expanded with real page-specific differentiators from the URL slug or H1.
+  - Final output must remain a complete thought.
 
-- Added API test coverage in `tests/api/metadata.test.ts` to verify:
-  - Commercial pages include the brand suffix exactly once
-  - Homepage titles omit the brand
-  - Titles do not end in blocked trailing stop words.
+- API acceptance coverage in `tests/api/metadata.test.ts` now verifies:
+  - complete titles land in the preferred `55` to `65` range when possible
+  - complete fallback titles can use `66` to `70` when needed
+  - thin short drafts are rejected and rewritten
+  - incomplete endings are rewritten instead of clipped
+  - primary keyword fidelity is preserved through the rewrite pass
+  - validation reruns after a failed editorial rewrite

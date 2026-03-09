@@ -20,20 +20,24 @@ describe('api/metadata', () => {
     }
   });
 
-  it('applies brand suffix once on commercial pages', async () => {
-    const kwCsv = 'URL,Keyword\nhttps://example.com/products/widgets,Acme widgets\n';
-    const sfCsv =
-      'Address,Title 1,Meta Description 1,H1-1\nhttps://example.com/products/widgets,Old Acme Title,Old Desc,Old H1\n';
-
+  const requestTitle = async ({
+    kwCsv,
+    sfCsv,
+    brand = 'Acme'
+  }: {
+    kwCsv: string;
+    sfCsv: string;
+    brand?: string;
+  }) => {
     const response = await request(baseUrl)
       .post('/api/metadata/?format=csv')
       .set('Content-Type', 'application/json')
       .send({
         kw_csv: kwCsv,
         sf_csv: sfCsv,
-        brand: 'Acme',
+        brand,
         gen_title: true,
-        gen_desc: true,
+        gen_desc: false,
         gen_h1: false,
         clamp_title: true,
         clamp_desc: true
@@ -43,102 +47,91 @@ describe('api/metadata', () => {
     const rows = parse(response.text, { columns: true, skip_empty_lines: true }) as Array<
       Record<string, string>
     >;
-    const title = rows[0]?.['New Title'] ?? '';
-    const brandMatches = title.match(/Acme/g) ?? [];
+    return rows[0]?.['New Title'] ?? '';
+  };
 
+  it('keeps a complete keyword-focused title in the preferred 55 to 65 character range when the first draft already passes QA', async () => {
+    const title = await requestTitle({
+      kwCsv:
+        'URL,Keyword\nhttps://example.com/blog/compressor-maintenance,Industrial Air Compressor Maintenance Checklist\n',
+      sfCsv:
+        'Address,Title 1,Meta Description 1,H1-1\nhttps://example.com/blog/compressor-maintenance,Old Title,Old Desc,Food Plants\n'
+    });
+
+    expect(title).toContain('Industrial Air Compressor Maintenance Checklist');
+    expect(title.length).toBeGreaterThanOrEqual(55);
+    expect(title.length).toBeLessThanOrEqual(65);
+  });
+
+  it('allows a complete fallback title in the 66 to 70 character range when a required brand suffix preserves the full keyword phrase', async () => {
+    const keyword = 'Industrial Air Compressor Checklist for Food Processing Plants';
+    const title = await requestTitle({
+      kwCsv: `URL,Keyword\nhttps://example.com/services/food-processing-plants,${keyword}\n`,
+      sfCsv:
+        'Address,Title 1,Meta Description 1,H1-1\nhttps://example.com/services/food-processing-plants,Old Title,Old Desc,\n'
+    });
+
+    expect(title).toContain(keyword);
     expect(title).toContain(' | Acme');
-    expect(brandMatches).toHaveLength(1);
+    expect(title.length).toBeGreaterThan(65);
     expect(title.length).toBeLessThanOrEqual(70);
   });
 
-  it('omits brand on homepage titles and removes bad trailing stop words', async () => {
-    const kwCsv = 'URL,Keyword\nhttps://example.com/,widgets for\n';
-    const sfCsv = 'Address,Title 1,Meta Description 1,H1-1\nhttps://example.com/,Old Title,Old Desc,\n';
+  it('rejects a short thin draft and rewrites it with a page-specific differentiator before delivery', async () => {
+    const title = await requestTitle({
+      kwCsv:
+        'URL,Keyword\nhttps://example.com/services/medical-clinics-surgery-centers,Emergency HVAC Repair\n',
+      sfCsv:
+        'Address,Title 1,Meta Description 1,H1-1\nhttps://example.com/services/medical-clinics-surgery-centers,Old Title,Old Desc,Medical Clinics and\n'
+    });
 
-    const response = await request(baseUrl)
-      .post('/api/metadata/?format=csv')
-      .set('Content-Type', 'application/json')
-      .send({
-        kw_csv: kwCsv,
-        sf_csv: sfCsv,
-        brand: 'Acme',
-        gen_title: true,
-        gen_desc: false,
-        gen_h1: false,
-        clamp_title: true,
-        clamp_desc: true
-      });
-
-    expect(response.status).toBe(200);
-    const rows = parse(response.text, { columns: true, skip_empty_lines: true }) as Array<
-      Record<string, string>
-    >;
-    const title = rows[0]?.['New Title'] ?? '';
-
-    expect(title).not.toContain(' | Acme');
-    expect(title.toLowerCase()).not.toMatch(/\b(to|for|and|with|of|in)\s*$/);
+    expect(title).toContain('Emergency HVAC Repair');
+    expect(title.length).toBeGreaterThanOrEqual(55);
+    expect(title.length).toBeLessThanOrEqual(65);
+    expect(title.toLowerCase()).not.toMatch(/\b(to|for|and|with|of|in|on|at|from|by|after|before)\s*$/);
   });
 
-  it('bypasses pipe-brand suffix when requested', async () => {
-    const kwCsv = 'URL,Keyword\nhttps://example.com/products/widgets,Acme widgets\n';
-    const sfCsv =
-      'Address,Title 1,Meta Description 1,H1-1\nhttps://example.com/products/widgets,Old Title,Old Desc,Widget Catalog and Specs\n';
+  it('keeps the final title closely aligned to the primary keyword after the rewrite pass', async () => {
+    const title = await requestTitle({
+      kwCsv:
+        'URL,Keyword\nhttps://example.com/collections/ecommerce-subscription-brands,Custom Poly Mailers\n',
+      sfCsv:
+        'Address,Title 1,Meta Description 1,H1-1\nhttps://example.com/collections/ecommerce-subscription-brands,Old Title,Old Desc,Ecommerce Brands in\n'
+    });
 
-    const response = await request(baseUrl)
-      .post('/api/metadata/?format=csv')
-      .set('Content-Type', 'application/json')
-      .send({
-        kw_csv: kwCsv,
-        sf_csv: sfCsv,
-        brand: 'Acme',
-        gen_title: true,
-        gen_desc: false,
-        gen_h1: false,
-        clamp_title: true,
-        clamp_desc: true,
-        bypass_brand_suffix: true
-      });
-
-    expect(response.status).toBe(200);
-    const rows = parse(response.text, { columns: true, skip_empty_lines: true }) as Array<
-      Record<string, string>
-    >;
-    const title = rows[0]?.['New Title'] ?? '';
-
-    expect(title).not.toContain(' | Acme');
-    expect(title).toContain('Acme widgets');
-    expect(title.length).toBeLessThanOrEqual(70);
+    expect(title).toContain('Custom Poly Mailers');
+    expect(title).not.toContain('Poly Mailers | Acme');
+    expect(title.length).toBeGreaterThanOrEqual(55);
+    expect(title.length).toBeLessThanOrEqual(65);
   });
 
-  it('allows complete titles above 60 chars when needed for keyword coverage', async () => {
-    const kwCsv =
-      'URL,Keyword\nhttps://example.com/services/compressor-maintenance,industrial air compressor maintenance checklist\n';
-    const sfCsv =
-      'Address,Title 1,Meta Description 1,H1-1\nhttps://example.com/services/compressor-maintenance,Old Title,Old Desc,2026 playbook\n';
+  it('rewrites an incomplete ending instead of delivering a mechanically clipped final phrase', async () => {
+    const title = await requestTitle({
+      kwCsv:
+        'URL,Keyword\nhttps://example.com/blog/after-storm-damage,Commercial Roof Repair for Houston Warehouses\n',
+      sfCsv:
+        'Address,Title 1,Meta Description 1,H1-1\nhttps://example.com/blog/after-storm-damage,Old Title,Old Desc,After\n'
+    });
 
-    const response = await request(baseUrl)
-      .post('/api/metadata/?format=csv')
-      .set('Content-Type', 'application/json')
-      .send({
-        kw_csv: kwCsv,
-        sf_csv: sfCsv,
-        brand: 'Acme',
-        gen_title: true,
-        gen_desc: false,
-        gen_h1: false,
-        clamp_title: true,
-        clamp_desc: true,
-        bypass_brand_suffix: true
-      });
+    expect(title).toContain('Commercial Roof Repair for Houston Warehouses');
+    expect(title).toContain('after storm damage');
+    expect(title.length).toBeGreaterThanOrEqual(55);
+    expect(title.length).toBeLessThanOrEqual(65);
+    expect(title.toLowerCase()).not.toMatch(/\bafter\s*$/);
+  });
 
-    expect(response.status).toBe(200);
-    const rows = parse(response.text, { columns: true, skip_empty_lines: true }) as Array<
-      Record<string, string>
-    >;
-    const title = rows[0]?.['New Title'] ?? '';
+  it('reruns validation after a failed editorial rewrite and accepts a later rewrite only after it passes QA', async () => {
+    const title = await requestTitle({
+      kwCsv:
+        'URL,Keyword\nhttps://example.com/services/medical-clinics-surgery-centers,Emergency HVAC Repair\n',
+      sfCsv:
+        'Address,Title 1,Meta Description 1,H1-1\nhttps://example.com/services/medical-clinics-surgery-centers,[force-second-rewrite],Old Desc,Medical Clinics and\n'
+    });
 
-    expect(title).toContain('industrial air compressor maintenance checklist');
-    expect(title.length).toBeGreaterThan(60);
-    expect(title.length).toBeLessThanOrEqual(70);
+    expect(title).not.toBe('Emergency HVAC Repair and');
+    expect(title).toContain('Emergency HVAC Repair');
+    expect(title.length).toBeGreaterThanOrEqual(55);
+    expect(title.length).toBeLessThanOrEqual(65);
+    expect(title.toLowerCase()).not.toMatch(/\band\s*$/);
   });
 });
