@@ -3,7 +3,7 @@
 This is a Next.js workbench with three workflows:
 - KWR Process: build three AI prompt templates from one client intake form.
 - Metadata Creation: generate new metadata CSVs using a keyword mapping CSV and OpenAI, with optional live scraping for context.
-- Onsites Parser: merge Onsites URL recommendations with Products, Posts, and Pages exports into one update-ready CSV.
+- Onsites Parser: turn Onsites URL recommendations into WordPress or Shopify-ready SEO exports.
 
 ## Workflows
 
@@ -28,6 +28,9 @@ Address,Keyword,Current Title,New Title,Current Description,New Description,Curr
 ```
 
 ### Onsites Parser (`/onsites-parser`)
+- `/onsites-parser` is a platform selector for WordPress and Shopify workflows.
+
+WordPress parser (`/onsites-parser/wordpress`)
 - Upload the Onsites CSV plus at least one source export: Products, Posts, or Pages.
 - Matched URLs are split into separate CSVs by source type.
 - Each matched export only includes URLs with `Match Status = matched`.
@@ -36,6 +39,13 @@ Address,Keyword,Current Title,New Title,Current Description,New Description,Curr
 - H1 updates are bypassed by default, so the H1 column is omitted from matched exports unless that bypass is disabled.
 - Anything not matched is exported into a separate non-matched CSV for review, including a short best-guess note about why the match failed.
 - If 30% or more of the original URL set is non-matched, the UI suggests uploading missing source exports.
+
+Shopify parser (`/onsites-parser/shopify`)
+- Upload only the Onsites CSV.
+- Only product URLs under `/products/` are exported.
+- Outputs a Shopify-ready CSV with `Handle`, `SEO Title`, and `SEO Description`.
+- `Title` is reserved for the onsite H1 and is only included when H1 bypass is turned off.
+- Non-product URLs are split into a separate exclusion CSV with a short reason.
 
 ## API routes
 - `POST /api/metadata/`

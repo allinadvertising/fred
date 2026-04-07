@@ -50,8 +50,8 @@ export default function HomePage() {
           <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Workflow 03</p>
           <h2 className="mt-3 text-2xl font-semibold text-white">Onsites Parser</h2>
           <p className="mt-2 text-sm text-slate-300">
-            Match Onsites URL recommendations against Products, Posts, and Pages exports and
-            download a merged CSV.
+            Choose the WordPress or Shopify parser, then turn onsite recommendations into
+            platform-ready SEO exports.
           </p>
           <span className="mt-4 inline-flex items-center text-sm font-semibold text-accent">
             Open Onsites Parser
