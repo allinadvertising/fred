@@ -1,8 +1,9 @@
-# Prompt Workbench (KWR + Metadata)
+# Prompt Workbench (KWR + Metadata + Onsites)
 
-This is a Next.js workbench with two workflows:
+This is a Next.js workbench with three workflows:
 - KWR Process: build three AI prompt templates from one client intake form.
 - Metadata Creation: generate new metadata CSVs using a keyword mapping CSV and OpenAI, with optional live scraping for context.
+- Onsites Parser: merge Onsites URL recommendations with Products, Posts, and Pages exports into one update-ready CSV.
 
 ## Workflows
 
@@ -25,6 +26,16 @@ Output CSV columns:
 ```
 Address,Keyword,Current Title,New Title,Current Description,New Description,Current H1,New H1
 ```
+
+### Onsites Parser (`/onsites-parser`)
+- Upload the Onsites CSV plus at least one source export: Products, Posts, or Pages.
+- Matched URLs are split into separate CSVs by source type.
+- Each matched export only includes URLs with `Match Status = matched`.
+- Matched exports keep source header names for the update fields and do not carry current metadata values forward.
+- SEO column mapping supports AIOSEO, Yoast, and Rank Math style exports.
+- H1 updates are bypassed by default, so the H1 column is omitted from matched exports unless that bypass is disabled.
+- Anything not matched is exported into a separate non-matched CSV for review, including a short best-guess note about why the match failed.
+- If 30% or more of the original URL set is non-matched, the UI suggests uploading missing source exports.
 
 ## API routes
 - `POST /api/metadata/`
@@ -51,17 +62,17 @@ See `.env.example`:
 ## Running locally
 1) Install deps: `npm install`
 2) Copy `.env.example` to `.env.local` and set `OPENAI_API_KEY`.
-3) Run dev server: `npm run dev`
+3) Run the development server while editing: `npm run dev`
 4) Open `http://localhost:3000`
 
 ## Production build
 This app is serverful (App Router + API routes). Use:
-```
+``` 
 npm run build
 npm run start
 ```
 
-`npm run start` runs `server.js`, which binds to `process.env.PORT` (useful for cPanel or shared hosting).
+`npm run start` runs `server.js` in production mode and binds to `process.env.PORT` (useful for cPanel or shared hosting). Do not use `npm run start` as a local dev substitute; use `npm run dev` for that.
 
 ## Tests
 - Watch: `npm run test`

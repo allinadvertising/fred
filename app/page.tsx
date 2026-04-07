@@ -14,7 +14,7 @@ export default function HomePage() {
         </p>
       </header>
 
-      <section className="grid gap-6 md:grid-cols-2">
+      <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
         <Link
           href="/kwr-process"
           className="glass group rounded-3xl border-slate-800 px-6 py-7 shadow-soft transition hover:-translate-y-1 hover:border-accent"
@@ -40,6 +40,21 @@ export default function HomePage() {
           </p>
           <span className="mt-4 inline-flex items-center text-sm font-semibold text-accent">
             Open Metadata Creation
+          </span>
+        </Link>
+
+        <Link
+          href="/onsites-parser"
+          className="glass group rounded-3xl border-slate-800 px-6 py-7 shadow-soft transition hover:-translate-y-1 hover:border-accent"
+        >
+          <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Workflow 03</p>
+          <h2 className="mt-3 text-2xl font-semibold text-white">Onsites Parser</h2>
+          <p className="mt-2 text-sm text-slate-300">
+            Match Onsites URL recommendations against Products, Posts, and Pages exports and
+            download a merged CSV.
+          </p>
+          <span className="mt-4 inline-flex items-center text-sm font-semibold text-accent">
+            Open Onsites Parser
           </span>
         </Link>
       </section>

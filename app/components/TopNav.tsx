@@ -12,6 +12,7 @@ export default function TopNav() {
   const pathname = usePathname() ?? '';
   const onKwr = pathname.startsWith('/kwr-process');
   const onMetadata = pathname.startsWith('/metadata-creation');
+  const onOnsitesParser = pathname.startsWith('/onsites-parser');
 
   return (
     <nav className="fixed left-0 right-0 top-0 z-50">
@@ -37,6 +38,13 @@ export default function TopNav() {
               aria-current={onMetadata ? 'page' : undefined}
             >
               Metadata Creation
+            </Link>
+            <Link
+              href="/onsites-parser"
+              className={`${linkBase} ${onOnsitesParser ? linkActive : ''}`}
+              aria-current={onOnsitesParser ? 'page' : undefined}
+            >
+              Onsites Parser
             </Link>
           </div>
         </div>
