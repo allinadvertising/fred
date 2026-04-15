@@ -85,12 +85,20 @@ export default function ShopifyOnsitesParserPage() {
           <p className="max-w-3xl text-base text-slate-300">
             Upload only the onsite CSV. Product URLs under
             <code className="ml-1 rounded bg-slate-900/70 px-1.5 py-0.5 text-xs">/products/</code>{' '}
+            or collection-scoped URLs like
+            <code className="ml-1 rounded bg-slate-900/70 px-1.5 py-0.5 text-xs">
+              /collections/.../products/...
+            </code>{' '}
             are converted into a Shopify-ready file with
             <code className="ml-1 rounded bg-slate-900/70 px-1.5 py-0.5 text-xs">Handle</code>,
             <code className="ml-1 rounded bg-slate-900/70 px-1.5 py-0.5 text-xs">SEO Title</code>,
             and
             <code className="ml-1 rounded bg-slate-900/70 px-1.5 py-0.5 text-xs">SEO Description</code>.
-            Non-product URLs are sent to a separate exclusion CSV.
+            Collection product URLs are normalized to their canonical
+            <code className="ml-1 rounded bg-slate-900/70 px-1.5 py-0.5 text-xs">
+              /products/handle
+            </code>{' '}
+            path before export. Non-product URLs are sent to a separate exclusion CSV.
           </p>
         </div>
       </header>
@@ -178,8 +186,14 @@ export default function ShopifyOnsitesParserPage() {
           <p className="mt-2 text-slate-400">
             The <code className="rounded bg-slate-950 px-1">Title</code> column is reserved for the
             onsite H1 and is only included when you turn off the bypass below. Any URL outside
-            <code className="ml-1 rounded bg-slate-950 px-1">/products/</code> goes into a separate
-            exclusion CSV with a short reason.
+            <code className="ml-1 rounded bg-slate-950 px-1">/products/</code> or
+            <code className="ml-1 rounded bg-slate-950 px-1">
+              /collections/.../products/...
+            </code>{' '}
+            goes into a separate exclusion CSV with a short reason. Supported collection URLs are
+            cleaned to the canonical
+            <code className="ml-1 rounded bg-slate-950 px-1">/products/handle</code> path before
+            export.
           </p>
         </div>
 

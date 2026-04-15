@@ -67,24 +67,38 @@ const normalizePath = (url: string) => {
   return (parsed.pathname.replace(/\/+$/g, '') || '/').toLowerCase();
 };
 
-const isShopifyProductUrl = (url: string) => {
+const decodeUrlSegment = (segment: string) => {
   try {
-    return normalizePath(url).startsWith('/products/');
+    return decodeURIComponent(segment);
   } catch {
-    return false;
+    return segment;
   }
 };
 
-const extractShopifyHandle = (url: string) => {
+const extractShopifyProductUrl = (url: string) => {
   try {
     const parsed = new URL(url);
-    const segments = parsed.pathname
-      .split('/')
-      .map((segment) => decodeURIComponent(segment.trim()))
-      .filter(Boolean);
-    return (segments[segments.length - 1] ?? '').toLowerCase();
+    const normalizedPath = normalizePath(url);
+    const directProductMatch = normalizedPath.match(/^\/products\/([^/]+)$/i);
+    const collectionProductMatch = normalizedPath.match(
+      /^\/collections\/[^/]+\/products\/([^/]+)$/i
+    );
+    const productLikePath = /^\/products$/i.test(normalizedPath);
+    const collectionProductLikePath = /^\/collections\/[^/]+\/products$/i.test(normalizedPath);
+    const rawHandle = directProductMatch?.[1] ?? collectionProductMatch?.[1] ?? '';
+    const handle = decodeUrlSegment(rawHandle).trim().toLowerCase();
+    const canonicalPath = handle ? `/products/${encodeURIComponent(handle)}` : '/products';
+
+    if (handle || productLikePath || collectionProductLikePath) {
+      return {
+        canonicalUrl: `${parsed.origin}${canonicalPath}`,
+        handle
+      };
+    }
+
+    return null;
   } catch {
-    return '';
+    return null;
   }
 };
 
@@ -109,9 +123,10 @@ const buildProductRow = (
 const buildExcludedRow = (
   entry: OnsiteEntry,
   status: string,
-  reason: string
+  reason: string,
+  urlOverride?: string
 ): ShopifyExcludedRow => ({
-  URL: entry.url,
+  URL: urlOverride ?? entry.url,
   Title: entry.title,
   Keywords: entry.keyword,
   'H1 Tag': entry.h1,
@@ -139,31 +154,38 @@ export const buildShopifyOnsitesOutput = ({
   let nonProduct = 0;
 
   onsiteEntries.forEach((entry) => {
-    if (!isShopifyProductUrl(entry.url)) {
+    const productUrl = extractShopifyProductUrl(entry.url);
+
+    if (!productUrl) {
       nonProduct += 1;
       excludedRows.push(
         buildExcludedRow(
           entry,
           'excluded_non_product',
-          'Only Shopify product URLs under /products/ are supported by this parser.'
+          'Only Shopify product URLs under /products/ or /collections/*/products/ are supported by this parser.'
         )
       );
       return;
     }
 
-    const handle = extractShopifyHandle(entry.url);
+    const normalizedEntry: OnsiteEntry = {
+      ...entry,
+      url: productUrl.canonicalUrl
+    };
+    const handle = productUrl.handle;
     if (!handle) {
       excludedRows.push(
         buildExcludedRow(
-          entry,
+          normalizedEntry,
           'excluded_missing_handle',
-          'Product URL did not include a usable Shopify product handle.'
+          'Product URL did not include a usable Shopify product handle.',
+          productUrl.canonicalUrl
         )
       );
       return;
     }
 
-    productRows.push(buildProductRow(entry, handle, bypassH1Update));
+    productRows.push(buildProductRow(normalizedEntry, handle, bypassH1Update));
   });
 
   const baseFileName = buildBaseFileName(onsiteFileName);

@@ -58,6 +58,61 @@ Meta Description,Summer sale SEO description,26,155`;
     expect(result.files[1].csvText).toContain('excluded_non_product');
   });
 
+  it('accepts collection-scoped product urls and exports the canonical product handle', () => {
+    const onsiteCsv = `Client Name,Example,,
+https://example.com/collections/bedroom/products/bedside-table/,,,
+,,Num,Limit
+Title,Bedside Table SEO Title,60,58
+Keywords,bedside table,,
+H1 Tag,Bedside Table H1,18,55
+Meta Description,Bedside table SEO description,26,155`;
+
+    const result = buildShopifyOnsitesOutput({
+      onsitesCsv: onsiteCsv
+    });
+
+    expect(result.summary).toEqual({
+      total: 1,
+      exported: 1,
+      excluded: 0,
+      nonProduct: 0
+    });
+    expect(result.rows).toEqual([
+      {
+        Handle: 'bedside-table',
+        'SEO Title': 'Bedside Table SEO Title',
+        'SEO Description': 'Bedside table SEO description'
+      }
+    ]);
+    expect(result.files[0].csvText).toBe(
+      'Handle,SEO Title,SEO Description\nbedside-table,Bedside Table SEO Title,Bedside table SEO description'
+    );
+  });
+
+  it('uses the canonical product url in exclusion exports for product-like paths without a handle', () => {
+    const onsiteCsv = `Client Name,Example,,
+https://example.com/collections/bedroom/products/,,,
+,,Num,Limit
+Title,Bedroom SEO Title,60,58
+Keywords,bedroom,,
+H1 Tag,Bedroom H1,18,55
+Meta Description,Bedroom SEO description,26,155`;
+
+    const result = buildShopifyOnsitesOutput({
+      onsitesCsv: onsiteCsv
+    });
+
+    expect(result.summary).toEqual({
+      total: 1,
+      exported: 0,
+      excluded: 1,
+      nonProduct: 0
+    });
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0].csvText).toContain('https://example.com/products');
+    expect(result.files[0].csvText).toContain('excluded_missing_handle');
+  });
+
   it('includes Title only when the H1 bypass is disabled', () => {
     const onsiteCsv = `Client Name,Example,,
 https://example.com/products/bedside-table/,,,

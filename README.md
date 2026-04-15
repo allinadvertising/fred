@@ -42,7 +42,8 @@ WordPress parser (`/onsites-parser/wordpress`)
 
 Shopify parser (`/onsites-parser/shopify`)
 - Upload only the Onsites CSV.
-- Only product URLs under `/products/` are exported.
+- Product URLs under `/products/` and `/collections/<collection>/products/<product>` are exported.
+- Collection-scoped product URLs are normalized to the canonical `/products/<product>` path before export.
 - Outputs a Shopify-ready CSV with `Handle`, `SEO Title`, and `SEO Description`.
 - `Title` is reserved for the onsite H1 and is only included when H1 bypass is turned off.
 - Non-product URLs are split into a separate exclusion CSV with a short reason.
