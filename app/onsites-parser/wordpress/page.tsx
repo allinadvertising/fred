@@ -26,12 +26,20 @@ const downloadFiles = (files: OnsitesGeneratedFile[]) => {
   files.forEach((file) => downloadCsv(file.csvText, file.fileName));
 };
 
+const WORDPRESS_SOURCE_LABELS: Record<OnsitesParserSummary['suggestedSources'][number], string> = {
+  products: 'Products',
+  productCategories: 'Product Categories',
+  posts: 'Posts',
+  pages: 'Pages'
+};
+
 const formatSourceList = (sources: OnsitesParserSummary['suggestedSources']) =>
-  sources.map((source) => source.charAt(0).toUpperCase() + source.slice(1)).join(', ');
+  sources.map((source) => WORDPRESS_SOURCE_LABELS[source]).join(', ');
 
 export default function OnsitesParserPage() {
   const [onsitesFile, setOnsitesFile] = useState<File | null>(null);
   const [productsFile, setProductsFile] = useState<File | null>(null);
+  const [productCategoriesFile, setProductCategoriesFile] = useState<File | null>(null);
   const [postsFile, setPostsFile] = useState<File | null>(null);
   const [pagesFile, setPagesFile] = useState<File | null>(null);
   const [bypassH1Update, setBypassH1Update] = useState(true);
@@ -55,17 +63,18 @@ export default function OnsitesParserPage() {
       return;
     }
 
-    if (!productsFile && !postsFile && !pagesFile) {
-      setError('Upload at least one source CSV: Products, Posts, or Pages.');
+    if (!productsFile && !productCategoriesFile && !postsFile && !pagesFile) {
+      setError('Upload at least one source CSV: Products, Product Categories, Posts, or Pages.');
       return;
     }
 
     setIsSubmitting(true);
 
     try {
-      const [onsitesCsv, productsCsv, postsCsv, pagesCsv] = await Promise.all([
+      const [onsitesCsv, productsCsv, productCategoriesCsv, postsCsv, pagesCsv] = await Promise.all([
         onsitesFile.text(),
         productsFile?.text() ?? Promise.resolve(''),
+        productCategoriesFile?.text() ?? Promise.resolve(''),
         postsFile?.text() ?? Promise.resolve(''),
         pagesFile?.text() ?? Promise.resolve('')
       ]);
@@ -73,6 +82,7 @@ export default function OnsitesParserPage() {
       const result = buildOnsitesParserOutput({
         onsitesCsv,
         productsCsv: productsCsv || undefined,
+        productCategoriesCsv: productCategoriesCsv || undefined,
         postsCsv: postsCsv || undefined,
         pagesCsv: pagesCsv || undefined,
         bypassH1Update,
@@ -107,10 +117,10 @@ export default function OnsitesParserPage() {
             WordPress onsite recommendations to source-ready exports.
           </h1>
           <p className="max-w-3xl text-base text-slate-300">
-            Upload the non-standard Onsites CSV plus at least one export from Products, Posts, or
-            Pages. Matched URLs are split into source-specific CSVs and everything not matched goes
-            into a separate non-matched file. SEO fields are mapped against AIOSEO, Yoast, and Rank
-            Math style headers automatically.
+            Upload the non-standard Onsites CSV plus at least one export from Products, Product
+            Categories, Posts, or Pages. Matched URLs are split into source-specific CSVs and
+            everything not matched goes into a separate non-matched file. SEO fields are mapped
+            against AIOSEO, Yoast, and Rank Math style headers automatically.
           </p>
         </div>
       </header>
@@ -195,8 +205,8 @@ export default function OnsitesParserPage() {
           <p className="mt-2">
             Matched exports only include URLs with <code className="rounded bg-slate-950 px-1">Match Status = matched</code>.
             Each matched file is split by source type and uses the source header names for the
-            update fields, including AIOSEO, Yoast, or Rank Math naming when those columns are
-            present.
+            update fields, including taxonomy-friendly category columns plus AIOSEO, Yoast, or
+            Rank Math naming when those columns are present.
           </p>
           <p className="mt-2 text-slate-400">
             No current metadata values are carried into the matched exports. When H1 bypass stays
@@ -221,7 +231,7 @@ export default function OnsitesParserPage() {
             {onsitesFile && <p className="text-xs text-slate-400">Selected: {onsitesFile.name}</p>}
           </div>
 
-          <div className="grid gap-6 md:grid-cols-3">
+          <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
             <div className="flex flex-col gap-2">
               <label className="label" htmlFor="products_csv">
                 Products CSV
@@ -235,6 +245,23 @@ export default function OnsitesParserPage() {
                 onChange={(event) => setProductsFile(event.target.files?.[0] ?? null)}
               />
               {productsFile && <p className="text-xs text-slate-400">Selected: {productsFile.name}</p>}
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <label className="label" htmlFor="product_categories_csv">
+                Product Categories CSV
+              </label>
+              <input
+                id="product_categories_csv"
+                name="product_categories_csv"
+                type="file"
+                accept=".csv"
+                className={fileInputClass}
+                onChange={(event) => setProductCategoriesFile(event.target.files?.[0] ?? null)}
+              />
+              {productCategoriesFile && (
+                <p className="text-xs text-slate-400">Selected: {productCategoriesFile.name}</p>
+              )}
             </div>
 
             <div className="flex flex-col gap-2">
@@ -324,8 +351,8 @@ export default function OnsitesParserPage() {
                 </p>
               ) : (
                 <p>
-                  All three source types are already uploaded. Review the non-matched download to
-                  see which URLs still need manual handling.
+                  All available source types are already uploaded. Review the non-matched download
+                  to see which URLs still need manual handling.
                 </p>
               )}
             </div>

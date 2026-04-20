@@ -64,12 +64,13 @@ Current Product H1,101,widget-product,Current Meta Title,Current Meta Descriptio
       ambiguous: 0,
       matchedBySource: {
         products: 1,
+        productCategories: 0,
         posts: 0,
         pages: 0
       },
       nonMatchedRate: 0,
       suggestionNeeded: false,
-      suggestedSources: ['posts', 'pages']
+      suggestedSources: ['productCategories', 'posts', 'pages']
     });
 
     expect(result.files).toHaveLength(1);
@@ -132,6 +133,44 @@ Current Product H1,101,widget-product,Current Rank Title,Current Rank Descriptio
     );
   });
 
+  it('builds product category matched exports from taxonomy-style source rows', () => {
+    const onsiteCsv = `Client Name,Example,,
+https://example.com/product-category/clothing/tshirts/,,,
+,,Num,Limit
+Title,T-Shirts Category Title,60,58
+Keywords,tshirts keyword,,
+H1 Tag,T-Shirts Category H1,18,55
+Meta Description,T-Shirts category description,26,155`;
+
+    const productCategoriesCsv = `name,slug,description,parent,TERMID,seo_title,meta_desc,focus_keyword
+Clothing,clothing,,,16,Current Clothing Title,Current Clothing Description,current clothing keyword
+Clothing>Tshirts,tshirts,,Clothing,17,Current Category Title,Current Category Description,current category keyword`;
+
+    const result = buildOnsitesParserOutput({
+      onsitesCsv: onsiteCsv,
+      productCategoriesCsv,
+      onsiteFileName: 'onsites.csv'
+    });
+
+    expect(result.summary.matchedBySource).toEqual({
+      products: 0,
+      productCategories: 1,
+      posts: 0,
+      pages: 0
+    });
+
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0]).toMatchObject({
+      kind: 'matched',
+      sourceType: 'productCategories',
+      fileName: 'onsites_product_categories_matched.csv',
+      rowCount: 1
+    });
+    expect(result.files[0].csvText).toBe(
+      'name,slug,parent,TERMID,seo_title,meta_desc,focus_keyword\nClothing>Tshirts,tshirts,Clothing,17,T-Shirts Category Title,T-Shirts category description,tshirts keyword'
+    );
+  });
+
   it('creates a non-matched file and suggests missing sources when 30% or more do not match', () => {
     const onsiteCsv = `Client Name,Example,,
 https://example.com/product/widget-product/,,,
@@ -161,7 +200,7 @@ Current Product H1,101,widget-product,Current Meta Title,Current Meta Descriptio
     expect(result.summary.nonMatched).toBe(1);
     expect(result.summary.nonMatchedRate).toBe(0.5);
     expect(result.summary.suggestionNeeded).toBe(true);
-    expect(result.summary.suggestedSources).toEqual(['posts', 'pages']);
+    expect(result.summary.suggestedSources).toEqual(['productCategories', 'posts', 'pages']);
 
     expect(result.files).toHaveLength(2);
     expect(result.files[0].csvText).toBe(
@@ -179,7 +218,7 @@ Current Product H1,101,widget-product,Current Meta Title,Current Meta Descriptio
     expect(result.files[1].csvText).toContain('Posts export was not uploaded');
   });
 
-  it('does not slug-match deep archive URLs unless an exact candidate exists', () => {
+  it('does not slug-match deep category archive URLs unless an exact candidate exists', () => {
     const onsiteCsv = `Client Name,Example,,
 https://example.com/product-category/barrels/9mm/,,,
 ,,Num,Limit
@@ -188,12 +227,12 @@ Keywords,category keyword,,
 H1 Tag,Category H1,,
 Meta Description,Category description,,`;
 
-    const productsCsv = `post_title,ID,post_name,aioseo_title,aioseo_description,keyphrases
-Current Product H1,101,9mm,Current Meta Title,Current Meta Description,current keyword`;
+    const productCategoriesCsv = `name,slug,parent,TERMID,seo_title,meta_desc,focus_keyword
+9mm,9mm,,17,Current Category Title,Current Category Description,current category keyword`;
 
     const result = buildOnsitesParserOutput({
       onsitesCsv: onsiteCsv,
-      productsCsv
+      productCategoriesCsv
     });
 
     expect(result.summary.nonMatched).toBe(1);

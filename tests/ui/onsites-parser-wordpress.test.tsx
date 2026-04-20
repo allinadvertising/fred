@@ -53,7 +53,9 @@ describe('onsites parser wordpress page', () => {
     fireEvent.submit(form);
 
     expect(
-      await screen.findByText(/Upload at least one source CSV: Products, Posts, or Pages/i)
+      await screen.findByText(
+        /Upload at least one source CSV: Products, Product Categories, Posts, or Pages/i
+      )
     ).toBeInTheDocument();
   });
 
@@ -127,6 +129,6 @@ Meta Description,Post one description,,`
     expect(
       await screen.findByText(/Consider exporting and uploading the other source files/i)
     ).toBeInTheDocument();
-    expect(await screen.findByText(/Posts, Pages/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Product Categories, Posts, Pages/i)).toBeInTheDocument();
   });
 });

@@ -31,10 +31,11 @@ Address,Keyword,Current Title,New Title,Current Description,New Description,Curr
 - `/onsites-parser` is a platform selector for WordPress and Shopify workflows.
 
 WordPress parser (`/onsites-parser/wordpress`)
-- Upload the Onsites CSV plus at least one source export: Products, Posts, or Pages.
+- Upload the Onsites CSV plus at least one source export: Products, Product Categories, Posts, or Pages.
 - Matched URLs are split into separate CSVs by source type.
 - Each matched export only includes URLs with `Match Status = matched`.
 - Matched exports keep source header names for the update fields and do not carry current metadata values forward.
+- Product category URLs under `/product-category/` can be matched from taxonomy-style category CSVs, including nested category paths when the source rows provide hierarchy data.
 - SEO column mapping supports AIOSEO, Yoast, and Rank Math style exports.
 - H1 updates are bypassed by default, so the H1 column is omitted from matched exports unless that bypass is disabled.
 - Anything not matched is exported into a separate non-matched CSV for review, including a short best-guess note about why the match failed.

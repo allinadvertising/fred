@@ -1,7 +1,7 @@
 import Papa from 'papaparse';
 import { findColumn, parseCsvText, type CsvRow } from '@/lib/csv';
 
-export type OnsitesSourceType = 'products' | 'posts' | 'pages';
+export type OnsitesSourceType = 'products' | 'productCategories' | 'posts' | 'pages';
 export type MatchStatus = 'matched' | 'unmatched' | 'ambiguous';
 export type MatchMethod = 'url' | 'path' | 'slug' | '';
 
@@ -36,6 +36,8 @@ export type OnsitesParserSummary = {
 
 type SourceFieldMap = {
   id?: string;
+  name?: string;
+  parent?: string;
   slug?: string;
   h1?: string;
   metaTitle?: string;
@@ -79,10 +81,27 @@ type EvaluatedEntry = {
   reason: string;
 };
 
+const SOURCE_TYPES = ['products', 'productCategories', 'posts', 'pages'] as const satisfies OnsitesSourceType[];
+
 const SOURCE_LABELS: Record<OnsitesSourceType, string> = {
   products: 'Products',
+  productCategories: 'Product Categories',
   posts: 'Posts',
   pages: 'Pages'
+};
+
+const SOURCE_SINGULAR_LABELS: Record<OnsitesSourceType, string> = {
+  products: 'product',
+  productCategories: 'product category',
+  posts: 'post',
+  pages: 'page'
+};
+
+const SOURCE_FILE_STEMS: Record<OnsitesSourceType, string> = {
+  products: 'products',
+  productCategories: 'product_categories',
+  posts: 'posts',
+  pages: 'pages'
 };
 
 const ONSITE_LABELS = {
@@ -94,7 +113,9 @@ const ONSITE_LABELS = {
 
 const URL_COLUMN_CANDIDATES = ['URL', 'Address', 'Url', 'url', 'permalink', 'link', 'custom_link'];
 const SLUG_COLUMN_CANDIDATES = ['post_name', 'slug', 'post_slug'];
-const ID_COLUMN_CANDIDATES = ['ID', 'id'];
+const ID_COLUMN_CANDIDATES = ['TERMID', 'term_id', 'termid', 'ID', 'id'];
+const NAME_COLUMN_CANDIDATES = ['name', 'Name'];
+const PARENT_COLUMN_CANDIDATES = ['parent', 'Parent'];
 const H1_COLUMN_CANDIDATES = ['post_title', 'title', 'Title'];
 const META_TITLE_COLUMN_CANDIDATES = [
   'aioseo_title',
@@ -133,6 +154,22 @@ const NON_MATCHED_COLUMNS = [
 ];
 
 const normalizeText = (value: string) => value.trim();
+
+const splitHierarchySegments = (value: string) =>
+  normalizeText(value)
+    .split('>')
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+const normalizeHierarchyName = (value: string) =>
+  splitHierarchySegments(value)
+    .join('>')
+    .toLowerCase();
+
+const lastHierarchySegment = (value: string) => {
+  const segments = splitHierarchySegments(value);
+  return (segments[segments.length - 1] ?? '').toLowerCase();
+};
 
 const csvEscape = (value: string) => {
   const raw = value ?? '';
@@ -227,13 +264,16 @@ const canUseSlugFallback = (path: string) => {
   if (segments.length === 1) return true;
   return (
     segments.length === 2 &&
-    ['product', 'blog', 'news', 'article', 'articles'].includes(segments[0] ?? '')
+    ['product', 'product-category', 'blog', 'news', 'article', 'articles'].includes(
+      segments[0] ?? ''
+    )
   );
 };
 
 const inferPreferredSource = (path: string): OnsitesSourceType | null => {
   const normalizedPath = normalizeComparablePath(path);
   if (normalizedPath.startsWith('/product/')) return 'products';
+  if (normalizedPath.startsWith('/product-category/')) return 'productCategories';
   if (
     normalizedPath.startsWith('/blog/') ||
     normalizedPath.startsWith('/news/') ||
@@ -247,9 +287,11 @@ const inferPreferredSource = (path: string): OnsitesSourceType | null => {
 
 const inferLikelySource = (path: string): OnsitesSourceType => {
   const normalizedPath = normalizeComparablePath(path);
+  if (normalizedPath.startsWith('/product-category/')) {
+    return 'productCategories';
+  }
   if (
     normalizedPath.startsWith('/product/') ||
-    normalizedPath.startsWith('/product-category/') ||
     normalizedPath.startsWith('/shop/')
   ) {
     return 'products';
@@ -320,6 +362,102 @@ const buildSourceIndexes = (records: SourceRecord[]): SourceIndexes => {
   return indexes;
 };
 
+const buildProductCategoryPathCandidates = (
+  rows: CsvRow[],
+  fieldMap: SourceFieldMap,
+  siteOrigin: string
+) => {
+  const rowDetails = rows.map((row) => ({
+    name: fieldMap.name ? normalizeText(row[fieldMap.name] ?? '') : '',
+    parent: fieldMap.parent ? normalizeText(row[fieldMap.parent] ?? '') : '',
+    slug: fieldMap.slug ? normalizeText(row[fieldMap.slug] ?? '').toLowerCase() : ''
+  }));
+
+  const byFullName = new Map<string, number>();
+  const byLeafName = new Map<string, number[]>();
+
+  rowDetails.forEach((detail, index) => {
+    const fullName = normalizeHierarchyName(detail.name);
+    if (fullName && !byFullName.has(fullName)) {
+      byFullName.set(fullName, index);
+    }
+
+    const leafName = lastHierarchySegment(detail.name);
+    if (leafName) {
+      const current = byLeafName.get(leafName) ?? [];
+      current.push(index);
+      byLeafName.set(leafName, current);
+    }
+  });
+
+  const resolveUniqueLeafMatch = (name: string) => {
+    const matches = byLeafName.get(name) ?? [];
+    return matches.length === 1 ? matches[0] : null;
+  };
+
+  const buildSlugTrail = (index: number, seen = new Set<number>()): string[] => {
+    if (seen.has(index)) return [];
+
+    const detail = rowDetails[index];
+    if (!detail?.slug) return [];
+
+    const nextSeen = new Set(seen);
+    nextSeen.add(index);
+
+    const nameSegments = splitHierarchySegments(detail.name);
+    if (nameSegments.length > 1) {
+      const trail = nameSegments
+        .map((_, segmentIndex) =>
+          byFullName.get(
+            nameSegments
+              .slice(0, segmentIndex + 1)
+              .join('>')
+              .toLowerCase()
+          )
+        )
+        .map((matchedIndex) => (matchedIndex == null ? '' : rowDetails[matchedIndex]?.slug ?? ''))
+        .filter(Boolean);
+
+      if (trail.length === nameSegments.length) {
+        return trail;
+      }
+    }
+
+    const normalizedParent = normalizeHierarchyName(detail.parent);
+    if (normalizedParent) {
+      const exactParentIndex = byFullName.get(normalizedParent);
+      const leafParentIndex = resolveUniqueLeafMatch(normalizedParent);
+      const parentIndex = exactParentIndex ?? leafParentIndex;
+
+      if (parentIndex != null && parentIndex !== index) {
+        const parentTrail = buildSlugTrail(parentIndex, nextSeen);
+        if (parentTrail.length > 0) {
+          return [...parentTrail, detail.slug];
+        }
+      }
+    }
+
+    return [detail.slug];
+  };
+
+  return rowDetails.map((detail, index) => {
+    if (!detail.slug) return [];
+
+    const candidatePaths = new Set<string>();
+    const slugTrail = buildSlugTrail(index);
+    const shortPath = `/product-category/${detail.slug}/`;
+
+    candidatePaths.add(shortPath);
+    if (slugTrail.length > 0) {
+      candidatePaths.add(`/product-category/${slugTrail.join('/')}/`);
+    }
+
+    return Array.from(candidatePaths)
+      .map((path) => buildAbsoluteUrl(path, siteOrigin))
+      .filter(Boolean);
+  });
+};
+
 const parseSourceCsv = (text: string, sourceType: OnsitesSourceType, siteOrigin: string): SourceContext => {
   const parsed = parseCsvText(text);
   if (parsed.errors.length > 0) {
@@ -329,6 +467,8 @@ const parseSourceCsv = (text: string, sourceType: OnsitesSourceType, siteOrigin:
   const fields = parsed.fields;
   const fieldMap: SourceFieldMap = {
     id: findColumn(fields, ID_COLUMN_CANDIDATES) ?? undefined,
+    name: findColumn(fields, NAME_COLUMN_CANDIDATES) ?? undefined,
+    parent: findColumn(fields, PARENT_COLUMN_CANDIDATES) ?? undefined,
     slug: findColumn(fields, SLUG_COLUMN_CANDIDATES) ?? undefined,
     h1: findColumn(fields, H1_COLUMN_CANDIDATES) ?? undefined,
     metaTitle: findColumn(fields, META_TITLE_COLUMN_CANDIDATES) ?? undefined,
@@ -338,6 +478,10 @@ const parseSourceCsv = (text: string, sourceType: OnsitesSourceType, siteOrigin:
 
   const explicitUrlColumns = URL_COLUMN_CANDIDATES.map((candidate) => findColumn(fields, [candidate]))
     .filter((value): value is string => Boolean(value));
+  const taxonomyCandidates =
+    sourceType === 'productCategories'
+      ? buildProductCategoryPathCandidates(parsed.rows, fieldMap, siteOrigin)
+      : [];
 
   const records = parsed.rows.map((row, index) => {
     const slugValue = fieldMap.slug ? normalizeText(row[fieldMap.slug] ?? '').toLowerCase() : '';
@@ -351,7 +495,12 @@ const parseSourceCsv = (text: string, sourceType: OnsitesSourceType, siteOrigin:
       candidatePaths.add(normalizeComparablePath(absolute));
     });
 
-    if (slugValue) {
+    if (sourceType === 'productCategories') {
+      (taxonomyCandidates[index] ?? []).forEach((absolute) => {
+        candidateUrls.add(normalizeComparableUrl(absolute));
+        candidatePaths.add(normalizeComparablePath(absolute));
+      });
+    } else if (slugValue) {
       const constructedPath = sourceType === 'products' ? `/product/${slugValue}/` : `/${slugValue}/`;
       const absolute = buildAbsoluteUrl(constructedPath, siteOrigin);
       if (absolute) {
@@ -382,7 +531,7 @@ const buildUnmatchedReason = (
   const likelySource = inferLikelySource(comparablePath);
 
   if (!sourceContexts[likelySource]) {
-    return `URL looks like a ${likelySource.slice(0, -1)} URL, but the ${SOURCE_LABELS[likelySource]} export was not uploaded.`;
+    return `URL looks like a ${SOURCE_SINGULAR_LABELS[likelySource]} URL, but the ${SOURCE_LABELS[likelySource]} export was not uploaded.`;
   }
 
   if (!hasAnyMatchableKeys(sourceContexts)) {
@@ -481,17 +630,34 @@ const findMatch = (
   };
 };
 
-const buildMatchedColumns = (fieldMap: SourceFieldMap, bypassH1Update: boolean) => {
-  const ordered = [
-    fieldMap.id,
-    fieldMap.slug,
-    bypassH1Update ? undefined : fieldMap.h1,
-    fieldMap.metaTitle,
-    fieldMap.metaDescription,
-    fieldMap.focusKeyword
-  ].filter((value): value is string => Boolean(value));
+const buildMatchedColumns = (
+  sourceType: OnsitesSourceType,
+  fieldMap: SourceFieldMap,
+  bypassH1Update: boolean
+) => {
+  const ordered =
+    sourceType === 'productCategories'
+      ? [
+          fieldMap.name,
+          fieldMap.slug,
+          fieldMap.parent,
+          fieldMap.id,
+          fieldMap.metaTitle,
+          fieldMap.metaDescription,
+          fieldMap.focusKeyword
+        ]
+      : [
+          fieldMap.id,
+          fieldMap.slug,
+          bypassH1Update ? undefined : fieldMap.h1,
+          fieldMap.metaTitle,
+          fieldMap.metaDescription,
+          fieldMap.focusKeyword
+        ];
 
-  return Array.from(new Set(ordered));
+  const columns = ordered.filter((value): value is string => Boolean(value));
+
+  return Array.from(new Set(columns));
 };
 
 const buildMatchedRow = (
@@ -502,13 +668,17 @@ const buildMatchedRow = (
 ) => {
   const row: CsvRow = {};
 
-  if (fieldMap.id) {
-    row[fieldMap.id] = record.values[fieldMap.id] ?? '';
-  }
-  if (fieldMap.slug) {
-    row[fieldMap.slug] = record.values[fieldMap.slug] ?? '';
-  }
-  if (!bypassH1Update && fieldMap.h1) {
+  const passthroughColumns =
+    record.sourceType === 'productCategories'
+      ? [fieldMap.name, fieldMap.slug, fieldMap.parent, fieldMap.id]
+      : [fieldMap.id, fieldMap.slug];
+
+  passthroughColumns.forEach((column) => {
+    if (!column) return;
+    row[column] = record.values[column] ?? '';
+  });
+
+  if (record.sourceType !== 'productCategories' && !bypassH1Update && fieldMap.h1) {
     row[fieldMap.h1] = entry.h1;
   }
   if (fieldMap.metaTitle) {
@@ -610,6 +780,7 @@ export const parseOnsitesCsv = (text: string): OnsiteEntry[] => {
 export const buildOnsitesParserOutput = ({
   onsitesCsv,
   productsCsv,
+  productCategoriesCsv,
   postsCsv,
   pagesCsv,
   bypassH1Update = true,
@@ -617,6 +788,7 @@ export const buildOnsitesParserOutput = ({
 }: {
   onsitesCsv: string;
   productsCsv?: string;
+  productCategoriesCsv?: string;
   postsCsv?: string;
   pagesCsv?: string;
   bypassH1Update?: boolean;
@@ -632,6 +804,13 @@ export const buildOnsitesParserOutput = ({
 
   if (productsCsv) {
     sourceContexts.products = parseSourceCsv(productsCsv, 'products', siteOrigin);
+  }
+  if (productCategoriesCsv) {
+    sourceContexts.productCategories = parseSourceCsv(
+      productCategoriesCsv,
+      'productCategories',
+      siteOrigin
+    );
   }
   if (postsCsv) {
     sourceContexts.posts = parseSourceCsv(postsCsv, 'posts', siteOrigin);
@@ -657,13 +836,14 @@ export const buildOnsitesParserOutput = ({
   const baseFileName = buildBaseFileName(onsiteFileName);
   const matchedBySource = {
     products: 0,
+    productCategories: 0,
     posts: 0,
     pages: 0
   } satisfies Record<OnsitesSourceType, number>;
 
   const matchedFiles: OnsitesGeneratedFile[] = [];
 
-  (['products', 'posts', 'pages'] as OnsitesSourceType[]).forEach((sourceType) => {
+  SOURCE_TYPES.forEach((sourceType) => {
     const context = sourceContexts[sourceType];
     if (!context) return;
 
@@ -674,7 +854,7 @@ export const buildOnsitesParserOutput = ({
     matchedBySource[sourceType] = matchedRows.length;
     if (!matchedRows.length) return;
 
-    const columns = buildMatchedColumns(context.fieldMap, bypassH1Update);
+    const columns = buildMatchedColumns(sourceType, context.fieldMap, bypassH1Update);
     if (!columns.length) return;
 
     const csvRows = matchedRows.map((item) =>
@@ -684,7 +864,7 @@ export const buildOnsitesParserOutput = ({
     matchedFiles.push({
       kind: 'matched',
       sourceType,
-      fileName: `${baseFileName}_${sourceType}_matched.csv`,
+      fileName: `${baseFileName}_${SOURCE_FILE_STEMS[sourceType]}_matched.csv`,
       label: `${SOURCE_LABELS[sourceType]} matched export`,
       rowCount: csvRows.length,
       csvText: rowsToCsv(columns, csvRows)
@@ -707,9 +887,7 @@ export const buildOnsitesParserOutput = ({
   const unmatched = evaluatedEntries.filter((item) => item.status === 'unmatched').length;
   const ambiguous = evaluatedEntries.filter((item) => item.status === 'ambiguous').length;
   const nonMatched = nonMatchedRows.length;
-  const suggestedSources = (['products', 'posts', 'pages'] as OnsitesSourceType[]).filter(
-    (sourceType) => !sourceContexts[sourceType]
-  );
+  const suggestedSources = SOURCE_TYPES.filter((sourceType) => !sourceContexts[sourceType]);
 
   const summary: OnsitesParserSummary = {
     total: onsiteEntries.length,
