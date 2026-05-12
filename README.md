@@ -35,6 +35,7 @@ WordPress parser (`/onsites-parser/wordpress`)
 - Matched URLs are split into separate CSVs by source type.
 - Each matched export only includes URLs with `Match Status = matched`.
 - Matched exports keep source header names for the update fields and do not carry current metadata values forward.
+- Nested product detail URLs under `/store/products/.../<product>/` are treated as product URLs and can match Products exports by product slug.
 - Product category URLs under `/product-category/` can be matched from taxonomy-style category CSVs, including nested category paths when the source rows provide hierarchy data.
 - SEO column mapping supports AIOSEO, Yoast, and Rank Math style exports.
 - H1 updates are bypassed by default, so the H1 column is omitted from matched exports unless that bypass is disabled.

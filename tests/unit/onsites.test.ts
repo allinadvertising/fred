@@ -85,6 +85,46 @@ Current Product H1,101,widget-product,Current Meta Title,Current Meta Descriptio
     );
   });
 
+  it('matches nested /store/products urls to product exports by slug', () => {
+    const onsiteCsv = `Client Name,Example,,
+https://example.com/store/products/adult-changing-tables/ct-5000-change-table-fixed-height-pressalit/,,,
+,,Num,Limit
+Title,CT 5000 Product Title,60,58
+Keywords,adult changing table,,
+H1 Tag,CT 5000 Product H1,18,55
+Meta Description,CT 5000 product description,26,155`;
+
+    const productsCsv = `post_title,ID,post_name,aioseo_title,aioseo_description,keyphrases
+Current Product H1,501,ct-5000-change-table-fixed-height-pressalit,Current Meta Title,Current Meta Description,current keyword`;
+
+    const result = buildOnsitesParserOutput({
+      onsitesCsv: onsiteCsv,
+      productsCsv,
+      onsiteFileName: 'onsites.csv'
+    });
+
+    expect(result.summary).toMatchObject({
+      matched: 1,
+      nonMatched: 0,
+      matchedBySource: {
+        products: 1,
+        productCategories: 0,
+        posts: 0,
+        pages: 0
+      }
+    });
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0]).toMatchObject({
+      kind: 'matched',
+      sourceType: 'products',
+      fileName: 'onsites_products_matched.csv',
+      rowCount: 1
+    });
+    expect(result.files[0].csvText).toBe(
+      'ID,post_name,aioseo_title,aioseo_description,keyphrases\n501,ct-5000-change-table-fixed-height-pressalit,CT 5000 Product Title,CT 5000 product description,adult changing table'
+    );
+  });
+
   it('maps Yoast-style headers when those fields are present', () => {
     const onsiteCsv = `Client Name,Example,,
 https://example.com/blog/widget-guide/,,,
@@ -216,6 +256,32 @@ Current Product H1,101,widget-product,Current Meta Title,Current Meta Descriptio
     );
     expect(result.files[1].csvText).toContain('https://example.com/blog/post-one/');
     expect(result.files[1].csvText).toContain('Posts export was not uploaded');
+  });
+
+  it('labels /store/products urls as products when the Products export is missing', () => {
+    const onsiteCsv = `Client Name,Example,,
+https://example.com/store/products/adult-changing-tables/ct-5000-change-table-fixed-height-pressalit/,,,
+,,Num,Limit
+Title,CT 5000 Product Title,60,58
+Keywords,adult changing table,,
+H1 Tag,CT 5000 Product H1,18,55
+Meta Description,CT 5000 product description,26,155`;
+
+    const pagesCsv = `post_title,ID,post_name,aioseo_title,aioseo_description,keyphrases
+About Us,301,about-us,Current Page Title,Current Page Description,current page keyword`;
+
+    const result = buildOnsitesParserOutput({
+      onsitesCsv: onsiteCsv,
+      pagesCsv,
+      onsiteFileName: 'onsites.csv'
+    });
+
+    expect(result.summary.nonMatched).toBe(1);
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0].kind).toBe('non_matched');
+    expect(result.files[0].csvText).toContain(
+      'URL looks like a product URL, but the Products export was not uploaded.'
+    );
   });
 
   it('does not slug-match deep category archive URLs unless an exact candidate exists', () => {

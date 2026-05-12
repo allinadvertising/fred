@@ -256,11 +256,25 @@ const lastPathSegment = (path: string) => {
   return (segments[segments.length - 1] ?? '').toLowerCase();
 };
 
+const isStoreProductsPath = (path: string) => {
+  const normalizedPath = normalizeComparablePath(path);
+  return normalizedPath === '/store/products' || normalizedPath.startsWith('/store/products/');
+};
+
+const canUseStoreProductsSlugFallback = (path: string) => {
+  const segments = normalizeComparablePath(path)
+    .split('/')
+    .filter(Boolean);
+
+  return segments.length >= 4 && segments[0] === 'store' && segments[1] === 'products';
+};
+
 const canUseSlugFallback = (path: string) => {
   const segments = normalizeComparablePath(path)
     .split('/')
     .filter(Boolean);
 
+  if (canUseStoreProductsSlugFallback(path)) return true;
   if (segments.length === 1) return true;
   return (
     segments.length === 2 &&
@@ -273,6 +287,7 @@ const canUseSlugFallback = (path: string) => {
 const inferPreferredSource = (path: string): OnsitesSourceType | null => {
   const normalizedPath = normalizeComparablePath(path);
   if (normalizedPath.startsWith('/product/')) return 'products';
+  if (isStoreProductsPath(normalizedPath)) return 'products';
   if (normalizedPath.startsWith('/product-category/')) return 'productCategories';
   if (
     normalizedPath.startsWith('/blog/') ||
@@ -292,7 +307,8 @@ const inferLikelySource = (path: string): OnsitesSourceType => {
   }
   if (
     normalizedPath.startsWith('/product/') ||
-    normalizedPath.startsWith('/shop/')
+    normalizedPath.startsWith('/shop/') ||
+    isStoreProductsPath(normalizedPath)
   ) {
     return 'products';
   }
