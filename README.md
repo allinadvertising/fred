@@ -69,7 +69,7 @@ Note: `trailingSlash: true` is enabled, so API routes use a trailing slash. If y
 ## Environment variables
 See `.env.example`:
 - `OPENAI_API_KEY` (required unless `META_TEST_MODE=true`)
-- `OPENAI_MODEL` (defaults to `gpt-4o-mini`)
+- `OPENAI_MODEL` (defaults to `gpt-5.5`)
 - `META_TEST_MODE` (when true, OpenAI calls are mocked)
 
 ## Running locally

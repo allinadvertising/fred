@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
 
-const MODEL_NAME = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
+const MODEL_NAME = process.env.OPENAI_MODEL ?? 'gpt-5.5';
 
 const isTruthy = (value?: string) => {
   if (!value) return false;

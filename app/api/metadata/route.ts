@@ -122,7 +122,13 @@ const BAD_TITLE_ENDINGS = [
 ];
 const TITLE_REWRITE_ATTEMPTS = 2;
 
-const MODEL_NAME = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
+const MODEL_NAME = process.env.OPENAI_MODEL ?? 'gpt-5.5';
+
+// Reasoning-style models (gpt-5*, o1*, o3*) only support the default
+// temperature (1) and reject an explicit value.
+function supportsCustomTemperature(model: string): boolean {
+  return !/^(gpt-5|o1|o3)/i.test(model);
+}
 const TEST_MODE = isTruthy(process.env.META_TEST_MODE);
 
 let client: OpenAI | null = null;
@@ -1272,7 +1278,7 @@ async function openaiStructured(prompt: string): Promise<GeneratedFields> {
           },
           { role: 'user', content: prompt }
         ],
-        temperature: 0.6
+        ...(supportsCustomTemperature(MODEL_NAME) ? { temperature: 0.6 } : {})
       });
 
       const content = response.choices[0]?.message?.content ?? '';
