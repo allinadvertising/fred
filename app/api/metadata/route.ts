@@ -39,7 +39,8 @@ type TitleValidationCode =
   | 'incomplete_ending'
   | 'dangling_separator'
   | 'unmatched_punctuation'
-  | 'brand_mismatch';
+  | 'brand_mismatch'
+  | 'disconnected_keyword_clause';
 
 type TitleValidationResult = {
   accepted: boolean;
@@ -614,6 +615,23 @@ function hasDanglingSeparator(title: string): boolean {
   return /\s*[\|\-–—:\/&]\s*$/.test(normalizeWhitespace(title));
 }
 
+function hasDisconnectedKeywordClause(title: string, keyword: string): boolean {
+  const normalizedKeyword = normalizeWhitespace(keyword).toLowerCase();
+  if (!normalizedKeyword) return false;
+
+  // Splits only on a colon or a spaced dash (" - "), not on hyphens inside
+  // compound words/model numbers like "B-500SF" or "N-Cal-Mag". A keyword
+  // leading the title ("Keyword - Detail") still reads as one phrase; a
+  // keyword stapled on as the trailing clause ("Detail: keyword") doesn't.
+  const segments = normalizeWhitespace(title)
+    .split(/\s+[-–—]\s+|:\s*/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  if (segments.length < 2) return false;
+  return segments[segments.length - 1].toLowerCase() === normalizedKeyword;
+}
+
 function endsWithBadTitleEnding(title: string): boolean {
   const endings = BAD_TITLE_ENDINGS.join('|');
   return new RegExp(`\\b(${endings})\\s*$`, 'i').test(normalizeWhitespace(title));
@@ -680,6 +698,8 @@ function buildValidationMessages(codes: TitleValidationCode[]): string[] {
         return 'Close any open punctuation and keep the title as one complete thought.';
       case 'brand_mismatch':
         return 'Apply the brand policy exactly once and use the exact suffix format only when required.';
+      case 'disconnected_keyword_clause':
+        return 'Do not staple the keyword on as its own clause after a colon or dash (e.g. "Product Name: keyword"). Weave it into the title as a real grammatical part of the phrase instead.';
     }
   });
 }
@@ -714,6 +734,9 @@ function validateTitleCandidate(title: string, context: MetadataRunContext): Tit
   }
   if (hasDanglingSeparator(coreTitleForEndingChecks) || hasDanglingSeparator(normalizedTitle)) {
     codes.push('dangling_separator');
+  }
+  if (hasDisconnectedKeywordClause(coreTitleForEndingChecks, context.keyword)) {
+    codes.push('disconnected_keyword_clause');
   }
   if (hasUnmatchedPunctuation(normalizedTitle)) {
     codes.push('unmatched_punctuation');
@@ -849,9 +872,9 @@ function buildDeterministicTitleCandidates(context: MetadataRunContext, seedTitl
 
   const candidates = [
     normalizeWhitespace(seedTitle),
+    ...detailPhrases.map((detail) => normalizeWhitespace(`${keyword} ${detail}`)),
     ...detailPhrases.map((detail) => normalizeWhitespace(combineKeywordAndDetail(keyword, detail))),
-    ...detailPhrases.map((detail) => normalizeWhitespace(`${detail}: ${keyword}`)),
-    ...detailPhrases.map((detail) => normalizeWhitespace(`${keyword} - ${detail}`)),
+    ...detailPhrases.map((detail) => normalizeWhitespace(`${detail} With ${keyword}`)),
     keyword
   ].filter(Boolean);
 
@@ -977,7 +1000,17 @@ Rules:
 - Return strictly valid JSON with keys: "title", "description", "h1".
 
 Title rules (only if "title" is in targets):
-1) Put the keyword early if natural. Do not force it.
+1) Weave the keyword into the title as a real grammatical part of it. Do not staple it on.
+   - The keyword must function as part of one coherent phrase with the product/page name, not a second clause
+     bolted on with a colon, dash, or pipe.
+   - BAD (keyword tacked on as a disconnected clause): "Grow More Sea Grow All Purpose 25 Lb: seaweed fertilizer"
+   - GOOD (keyword integrated as a natural descriptor): "Seaweed Fertilizer Grow More Sea Grow All Purpose 25 Lb"
+   - BAD: "Grow More Mendocino N-Cal-Mag: liquid cal mag"
+   - GOOD (keyword's distinguishing word folded directly into the product name): "Grow More Mendocino Liquid N-Cal-Mag"
+   - BAD: "Grow More Water Soluble High Foss: starter fertilizer"
+   - GOOD: "Grow More Water Soluble High Foss With Starter Fertilizer"
+   - Put the keyword early if it reads naturally as a lead descriptor; otherwise fold it into the product name or
+     attach it with a real connector word ("with", "for") so the title reads as one sentence-like phrase.
    - Prioritize the most compelling complete wording over robotic exact-length matching.
 2) Uniqueness requirement:
    - Title must be meaningfully unique for this URL.
@@ -1031,7 +1064,10 @@ ${validation.messages.map((message) => `- ${message}`).join('\n')}
 
 Rewrite rules:
 - Return one complete meta title in JSON as { "title": "...", "description": "", "h1": "" }.
-- Keep the title tightly aligned to the primary keyword.
+- Keep the title tightly aligned to the primary keyword, and weave it into the title as a real grammatical part of
+  the phrase. Never staple it on as a separate clause after a colon, dash, or pipe (e.g. "Product Name: keyword" is
+  wrong). Either lead with the keyword as a natural descriptor ("Keyword Product Name"), fold its distinguishing
+  word directly into the product name, or attach it with a real connector word like "with" or "for".
 - Prefer ${TITLE_PREFERRED_MIN} to ${TITLE_PREFERRED_MAX} characters.
 - Allow ${TITLE_PREFERRED_MAX + 1} to ${TITLE_FALLBACK_MAX} only if needed to preserve a complete phrase.
 - Do not clip, trim, or cut off the ending.
@@ -1291,6 +1327,28 @@ function repairDanglingTitleEnding(
   return resolveTitleCandidate(repairedCore, context);
 }
 
+function repairDisconnectedKeywordClause(
+  title: string,
+  context: MetadataRunContext
+): TitleValidationResult {
+  const keyword = normalizeWhitespace(context.keyword);
+  const keywordLower = keyword.toLowerCase();
+  const core = stripBrandVariants(title, context.brandName);
+  const segments = normalizeWhitespace(core)
+    .split(/\s+[-–—]\s+|:\s*/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  const detailSegment = segments.find((segment) => segment.toLowerCase() !== keywordLower);
+  if (!detailSegment) {
+    return validateTitleCandidate(title, context);
+  }
+
+  // Merge the keyword and the remaining detail into one phrase instead of
+  // leaving them as separate clauses split by a colon or dash.
+  return resolveTitleCandidate(normalizeWhitespace(`${keyword} ${detailSegment}`), context);
+}
+
 async function finalizeTitle(
   seedTitle: string,
   context: MetadataRunContext
@@ -1320,6 +1378,15 @@ async function finalizeTitle(
 
   if (deterministic && scoreTitleValidation(deterministic) > scoreTitleValidation(best)) {
     best = deterministic;
+  }
+
+  // Never ship a title that staples the keyword on as its own clause —
+  // merge it into the surrounding phrase instead.
+  if (!best.accepted && best.codes.includes('disconnected_keyword_clause')) {
+    const repaired = repairDisconnectedKeywordClause(best.title, context);
+    if (repaired.accepted || scoreTitleValidation(repaired) > scoreTitleValidation(best)) {
+      best = repaired;
+    }
   }
 
   // Never ship a title that still reads as clipped — strip the dangling

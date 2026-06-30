@@ -92,6 +92,18 @@ describe('api/metadata', () => {
     expect(title.toLowerCase()).not.toMatch(/\band\s*(\||$)/);
   });
 
+  it('rewrites a title that staples the keyword on as a trailing clause after a colon', async () => {
+    const title = await requestTitle({
+      kwCsv:
+        'URL,Keyword\nhttps://example.com/products/mendocino-n-cal-mag,liquid cal mag\n',
+      sfCsv:
+        'Address,Title 1,Meta Description 1,H1-1\nhttps://example.com/products/mendocino-n-cal-mag,[force-second-rewrite],Old Desc,Grow More Mendocino N-Cal-Mag\n'
+    });
+
+    expect(title.toLowerCase()).not.toMatch(/:\s*liquid cal mag\b/);
+    expect(title.toLowerCase()).toContain('liquid cal mag');
+  });
+
   it('repairs a description that stops mid-sentence instead of shipping a dangling fragment', async () => {
     const description = await requestDescription({
       kwCsv: 'URL,Keyword\nhttps://example.com/products/sea-grow,seaweed fertilizer\n',
