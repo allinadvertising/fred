@@ -358,15 +358,37 @@ function ensureHttpUrl(value: string): string {
   }
 }
 
-function clamp(text: string, maxChars: number): string {
-  if (!text) return text;
-  if (text.length <= maxChars) return text;
-  const cut = text.slice(0, maxChars);
-  const prevChar = text.charAt(maxChars - 1);
-  const nextChar = text.charAt(maxChars);
-  const brokeWord = /\S/.test(prevChar) && /\S/.test(nextChar);
-  const trimmed = brokeWord ? cut.replace(/\s+\S*$/g, '') : cut;
-  return trimmed.replace(/[ .,!;:?\"-]+$/g, '').trim();
+function endsWithTerminalPunctuation(text: string): boolean {
+  return /[.!?]['"’”)]?$/.test(normalizeWhitespace(text));
+}
+
+function clampDescription(text: string, maxChars: number): string {
+  const normalized = normalizeWhitespace(text);
+  if (!normalized) return normalized;
+
+  const withinLimit = normalized.length <= maxChars ? normalized : normalized.slice(0, maxChars);
+
+  const sentenceMatches = Array.from(withinLimit.matchAll(/[.!?](?=\s|$)/g));
+  const lastSentenceEnd = sentenceMatches.length
+    ? (sentenceMatches[sentenceMatches.length - 1].index ?? -1) + 1
+    : -1;
+
+  let trimmed: string;
+  if (lastSentenceEnd >= Math.floor(maxChars * 0.55)) {
+    trimmed = withinLimit.slice(0, lastSentenceEnd);
+  } else {
+    const lastComma = withinLimit.lastIndexOf(',');
+    if (lastComma >= Math.floor(maxChars * 0.55)) {
+      trimmed = withinLimit.slice(0, lastComma);
+    } else {
+      trimmed = /\s\S*$/.test(withinLimit) ? withinLimit.replace(/\s+\S*$/, '') : withinLimit;
+    }
+    trimmed = cleanDetailPhrase(trimmed);
+  }
+
+  trimmed = trimmed.trim();
+  if (!trimmed) return trimmed;
+  return endsWithTerminalPunctuation(trimmed) ? trimmed : `${trimmed}.`;
 }
 
 function findColumn(rows: CsvRow[], candidates: string[]): string | null {
@@ -795,14 +817,31 @@ function combineKeywordAndDetail(keyword: string, detail: string): string {
     : `${keyword} for ${detail}`;
 }
 
+const TITLE_CASE_MINOR_WORDS = new Set([
+  'a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'in', 'nor', 'of', 'on', 'or', 'per', 'the', 'to', 'vs', 'via', 'with'
+]);
+
+function toTitleCase(text: string): string {
+  const words = normalizeWhitespace(text).split(' ');
+  return words
+    .map((word, index) => {
+      if (!word) return word;
+      // Leave words that already carry a capital (e.g. from an H1) untouched;
+      // only fix fully lowercase fragments pulled from a URL slug.
+      if (/[A-Z]/.test(word)) return word;
+      const isEdge = index === 0 || index === words.length - 1;
+      if (!isEdge && TITLE_CASE_MINOR_WORDS.has(word.toLowerCase())) return word;
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(' ');
+}
+
 function buildDeterministicTitleCandidates(context: MetadataRunContext, seedTitle: string): string[] {
   const keyword = normalizeWhitespace(context.keyword);
-  const h1 = cleanDetailPhrase(context.currentH1);
-  const slugHint = cleanDetailPhrase(getSlugHint(context.url));
   const detailPhrases = Array.from(
     new Set(
-      [h1, slugHint]
-        .map((value) => cleanDetailPhrase(value))
+      [context.currentH1, getSlugHint(context.url)]
+        .map((value) => toTitleCase(cleanDetailPhrase(value)))
         .filter(Boolean)
         .filter((value) => !keyword.toLowerCase().includes(value.toLowerCase()))
     )
@@ -813,7 +852,6 @@ function buildDeterministicTitleCandidates(context: MetadataRunContext, seedTitl
     ...detailPhrases.map((detail) => normalizeWhitespace(combineKeywordAndDetail(keyword, detail))),
     ...detailPhrases.map((detail) => normalizeWhitespace(`${detail}: ${keyword}`)),
     ...detailPhrases.map((detail) => normalizeWhitespace(`${keyword} - ${detail}`)),
-    ...detailPhrases.map((detail) => normalizeWhitespace(`${keyword} ${detail}`)),
     keyword
   ].filter(Boolean);
 
@@ -1002,6 +1040,114 @@ Rewrite rules:
 `.trim();
 }
 
+type DescriptionValidationCode =
+  | 'too_long'
+  | 'incomplete_ending'
+  | 'dangling_separator'
+  | 'missing_terminal_punctuation';
+
+type DescriptionValidationResult = {
+  accepted: boolean;
+  text: string;
+  codes: DescriptionValidationCode[];
+};
+
+function validateDescriptionCandidate(text: string, enforceLength: boolean): DescriptionValidationResult {
+  const normalized = normalizeWhitespace(text);
+  const codes: DescriptionValidationCode[] = [];
+
+  if (!normalized) {
+    return { accepted: false, text: normalized, codes };
+  }
+
+  if (enforceLength && normalized.length > DESCRIPTION_HARD_MAX) {
+    codes.push('too_long');
+  }
+  if (endsWithBadTitleEnding(normalized)) {
+    codes.push('incomplete_ending');
+  }
+  if (hasDanglingSeparator(normalized)) {
+    codes.push('dangling_separator');
+  }
+  if (!endsWithTerminalPunctuation(normalized)) {
+    codes.push('missing_terminal_punctuation');
+  }
+
+  return { accepted: codes.length === 0, text: normalized, codes };
+}
+
+function buildDescriptionEditorPrompt(
+  context: MetadataRunContext,
+  rejectedDescription: string,
+  validation: DescriptionValidationResult
+): string {
+  return `
+You are an SEO meta description editor. Rewrite the rejected description so it passes QA.
+
+URL: ${context.url}
+Primary Keyword: ${context.keyword}
+Current H1: ${context.currentH1}
+Rejected Description: ${rejectedDescription}
+QA Failures: ${validation.codes.join(', ') || 'none'}
+
+Rewrite rules:
+- Return the result as JSON: { "title": "", "description": "...", "h1": "" }.
+- The description must read as one or more complete sentences ending in proper punctuation. Never stop mid-thought, mid-clause, or on a dangling word.
+- Target 150 to 160 characters, but a shorter complete description beats a longer incomplete one.
+- Use the primary keyword naturally if it fits without forcing it.
+- No HTML, no surrounding quotes.
+`.trim();
+}
+
+function localMockDescriptionEditor(rejectedDescription: string): string {
+  return clampDescription(rejectedDescription, DESCRIPTION_HARD_MAX);
+}
+
+async function callDescriptionEditor(
+  context: MetadataRunContext,
+  rejectedDescription: string,
+  validation: DescriptionValidationResult
+): Promise<string> {
+  if (TEST_MODE) {
+    return localMockDescriptionEditor(rejectedDescription);
+  }
+
+  const prompt = buildDescriptionEditorPrompt(context, rejectedDescription, validation);
+  const edited = await openaiStructured(prompt);
+  return normalizeWhitespace(edited.description);
+}
+
+async function finalizeDescription(
+  seedDesc: string,
+  context: MetadataRunContext,
+  enforceLength: boolean
+): Promise<string> {
+  const normalizedSeed = normalizeWhitespace(seedDesc) || normalizeWhitespace(context.currentDesc);
+  if (!normalizedSeed) return normalizedSeed;
+
+  let candidateText = normalizedSeed;
+  let validation = validateDescriptionCandidate(candidateText, enforceLength);
+
+  if (!validation.accepted) {
+    const rewritten = await callDescriptionEditor(context, candidateText, validation);
+    if (rewritten) {
+      const rewrittenValidation = validateDescriptionCandidate(rewritten, enforceLength);
+      if (rewrittenValidation.accepted || rewrittenValidation.codes.length < validation.codes.length) {
+        candidateText = rewritten;
+        validation = rewrittenValidation;
+      }
+    }
+  }
+
+  // Last resort: guarantee a complete, properly bounded sentence rather
+  // than ship text that stops mid-thought.
+  if (!validation.accepted) {
+    candidateText = clampDescription(candidateText, DESCRIPTION_HARD_MAX);
+  }
+
+  return candidateText;
+}
+
 function getSlugHint(url: string): string {
   const path = toPathname(url);
   const parts = path
@@ -1134,6 +1280,17 @@ async function callTitleEditor(
   return normalizeWhitespace(edited.title);
 }
 
+function repairDanglingTitleEnding(
+  title: string,
+  context: MetadataRunContext
+): TitleValidationResult {
+  const repairedCore = cleanDetailPhrase(stripBrandVariants(title, context.brandName));
+  if (!repairedCore) {
+    return validateTitleCandidate(title, context);
+  }
+  return resolveTitleCandidate(repairedCore, context);
+}
+
 async function finalizeTitle(
   seedTitle: string,
   context: MetadataRunContext
@@ -1163,6 +1320,15 @@ async function finalizeTitle(
 
   if (deterministic && scoreTitleValidation(deterministic) > scoreTitleValidation(best)) {
     best = deterministic;
+  }
+
+  // Never ship a title that still reads as clipped — strip the dangling
+  // trailing word/separator rather than deliver an incomplete phrase.
+  if (!best.accepted && (best.codes.includes('incomplete_ending') || best.codes.includes('dangling_separator'))) {
+    const repaired = repairDanglingTitleEnding(best.title, context);
+    if (repaired.accepted || scoreTitleValidation(repaired) > scoreTitleValidation(best)) {
+      best = repaired;
+    }
   }
 
   return best;
@@ -1230,8 +1396,8 @@ async function generateRows(
       const validatedTitle = await finalizeTitle(finalTitle, context);
       finalTitle = validatedTitle.title;
     }
-    if (options.clamp_desc) {
-      finalDesc = clamp(finalDesc, DESCRIPTION_HARD_MAX);
+    if (options.gen_desc) {
+      finalDesc = await finalizeDescription(finalDesc, context, options.clamp_desc);
     }
 
     output.push({

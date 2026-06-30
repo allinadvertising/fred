@@ -50,6 +50,60 @@ describe('api/metadata', () => {
     return rows[0]?.['New Title'] ?? '';
   };
 
+  const requestDescription = async ({
+    kwCsv,
+    sfCsv,
+    brand = 'Acme'
+  }: {
+    kwCsv: string;
+    sfCsv: string;
+    brand?: string;
+  }) => {
+    const response = await request(baseUrl)
+      .post('/api/metadata/?format=csv')
+      .set('Content-Type', 'application/json')
+      .send({
+        kw_csv: kwCsv,
+        sf_csv: sfCsv,
+        brand,
+        gen_title: false,
+        gen_desc: true,
+        gen_h1: false,
+        clamp_title: true,
+        clamp_desc: true
+      });
+
+    expect(response.status).toBe(200);
+    const rows = parse(response.text, { columns: true, skip_empty_lines: true }) as Array<
+      Record<string, string>
+    >;
+    return rows[0]?.['New Description'] ?? '';
+  };
+
+  it('avoids a glued lowercase keyword+slug title when falling back to deterministic candidates', async () => {
+    const title = await requestTitle({
+      kwCsv:
+        'URL,Keyword\nhttps://example.com/products/bio-cozyme-bio-stimulant,bio stimulant\n',
+      sfCsv:
+        'Address,Title 1,Meta Description 1,H1-1\nhttps://example.com/products/bio-cozyme-bio-stimulant,[force-second-rewrite],Old Desc,\n'
+    });
+
+    expect(title.toLowerCase()).not.toContain('bio stimulant bio cozyme bio stimulant');
+    expect(title.toLowerCase()).not.toMatch(/\band\s*(\||$)/);
+  });
+
+  it('repairs a description that stops mid-sentence instead of shipping a dangling fragment', async () => {
+    const description = await requestDescription({
+      kwCsv: 'URL,Keyword\nhttps://example.com/products/sea-grow,seaweed fertilizer\n',
+      sfCsv:
+        'Address,Title 1,Meta Description 1,H1-1\nhttps://example.com/products/sea-grow,Old Title,"Enhance your plants with Grow More Sea Grow a balanced seaweed fertilizer blend featuring essential nutrients for robust growth. Perfect for all gardening",Sea Grow\n'
+    });
+
+    expect(description.length).toBeLessThanOrEqual(160);
+    expect(description.toLowerCase()).not.toMatch(/\b(to|for|and|with|of|in|on|at|from|by|after|before)\s*$/);
+    expect(/[.!?]$/.test(description)).toBe(true);
+  });
+
   it('keeps a complete keyword-focused title in the preferred 55 to 65 character range when the first draft already passes QA', async () => {
     const title = await requestTitle({
       kwCsv:
@@ -114,7 +168,7 @@ describe('api/metadata', () => {
     });
 
     expect(title).toContain('Commercial Roof Repair for Houston Warehouses');
-    expect(title).toContain('after storm damage');
+    expect(title).toContain('After Storm Damage');
     expect(title.length).toBeGreaterThanOrEqual(55);
     expect(title.length).toBeLessThanOrEqual(65);
     expect(title.toLowerCase()).not.toMatch(/\bafter\s*$/);
